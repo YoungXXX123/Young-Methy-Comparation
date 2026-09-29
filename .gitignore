@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.log
+.env
+*.ab1
+*.abi
+*.csv
+*.xlsx
+*.xls
+*.pdf
+*.png
