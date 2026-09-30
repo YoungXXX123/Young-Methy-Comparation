@@ -16,26 +16,24 @@ function read(name: string, quality: number, changes: Record<number, Partial<Bas
     result: { name, ...mapToReference(reference, { sequence: reference, quality: Array(reference.length).fill(quality), proportions }) } };
 }
 
-test("AB1 logo uses C/T signal at CpG and reference-defined CpN, and four channels elsewhere", () => {
+test("regional AB1 logo keeps CpG focus separate from independent CpN analysis", () => {
   const sample = read("first.ab1", 30, {
     0: { A: .4, C: .2, G: .1, T: .3 },
     1: { A: .1, C: .6, G: .1, T: .2 },
     4: { A: .3, C: .35, G: .1, T: .25 },
   });
   const logo = mergedRegionalLogo([sample], reference, 0, region, false, 20);
-  assert.equal(logo.columns.find((column) => column.index === 1)?.kind, "cpn");
+  assert.equal(logo.columns.find((column) => column.index === 1)?.kind, "other");
   assert.equal(logo.columns.find((column) => column.index === 4)?.kind, "cpg");
-  assert.ok(Math.abs(logo.columns[1].proportions.C - .75) < 1e-12);
+  assert.ok(Math.abs(logo.columns[1].proportions.C - .6) < 1e-12);
   assert.ok(Math.abs(logo.columns[4].proportions.C - .35 / .6) < 1e-12);
   assert.deepEqual(logo.columns[0].proportions, { A: .4, C: .2, G: .1, T: .3 });
-  assert.equal(logo.columns[1].proportions.A, 0);
-  assert.equal(logo.columns[1].proportions.G, 0);
+  assert.equal(logo.columns[1].proportions.A, .1);
+  assert.equal(logo.columns[1].proportions.G, .1);
 
-  assert.deepEqual(logoPlacements(logo.columns, region, true, false, 0, 420)
+  assert.deepEqual(logoPlacements(logo.columns, region, true, 0, 420)
     .map(({ column }) => column.index), [4]);
-  assert.deepEqual(logoPlacements(logo.columns, region, true, true, 0, 420)
-    .map(({ column }) => column.index), [1, 4]);
-  assert.equal(logoPlacements(logo.columns, region, false, false, 0, 420).length, reference.length);
+  assert.equal(logoPlacements(logo.columns, region, false, 0, 420).length, reference.length);
 });
 
 test("logo follows higher-Q overlap and optional Phred filtering", () => {

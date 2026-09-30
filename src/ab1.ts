@@ -7,7 +7,7 @@ export type TraceCurves = Record<Base, TracePoint[]>;
 export type ChosenRead = { read: Read; score: number; coverage: number; meanQ: number; curves?: TraceCurves };
 export type RegionBatch = { group: string; batch: string; reads: Read[] };
 export type RegionalTrace = { curves: TraceCurves; cpgSites: number[]; meanQ: number | null; coveredBases: number };
-export type LogoKind = "cpg" | "cpn" | "other";
+export type LogoKind = "cpg" | "other";
 export type LogoColumn = { index: number; distance: number; kind: LogoKind; proportions: Record<Base, number>; quality: number | null };
 export type RegionalLogo = { columns: LogoColumn[]; meanQ: number | null; coveredBases: number };
 export const FOCUS_X_STRETCH = 1.8;
@@ -79,9 +79,7 @@ export function mergedRegionalLogo(reads: Read[], reference: string, center: num
     coveredBases += 1;
     if (Number.isFinite(q)) qualities.push(Number(q));
     const cpg = reference[index] === "C" && reference[index + 1] === "G";
-    const called = bases.reduce((best, base) => raw[base] > raw[best] ? base : best, "A" as Base);
-    const cpn = reference[index] === "C" && reference[index + 1] !== "G" && called === "C";
-    const kind: LogoKind = cpg ? "cpg" : cpn ? "cpn" : "other";
+    const kind: LogoKind = cpg ? "cpg" : "other";
     const ct = raw.C + raw.T;
     if (kind !== "other" && ct <= 0) continue;
     const proportions = kind === "other"

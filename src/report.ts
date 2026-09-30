@@ -8,7 +8,7 @@ import { logoColors, logoLetters, logoPlacements } from "./sequence-logo";
 
 export type ReportPart = "combined" | "main" | "logo";
 export type RegionSource = { reads: Read[]; reference: string; center: number | null;
-  filterQ: boolean; minimumQ: number; focus: boolean; showCpn: boolean };
+  filterQ: boolean; minimumQ: number; focus: boolean };
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -27,15 +27,15 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
   const showMain = part !== "logo", showLogo = part !== "main";
   const mainHeight = 210, zoomHeight = 220, connectorHeight = 72, logoHeight = 125;
   const columns = regionColumns(regions, full, width, left, right);
-  const logoRows = new Map<string, Array<{ batch: RegionBatch; logo: RegionalLogo; focus: boolean; showCpn: boolean }>>();
+  const logoRows = new Map<string, Array<{ batch: RegionBatch; logo: RegionalLogo; focus: boolean }>>();
   if (showLogo) for (const region of regions) {
-    const source = regionSources[region.name] ?? { reads, reference, center, filterQ: false, minimumQ: 20, focus: true, showCpn: false };
+    const source = regionSources[region.name] ?? { reads, reference, center, filterQ: false, minimumQ: 20, focus: true };
     if (source.center === null || !source.reference) continue;
-    const rows: Array<{ batch: RegionBatch; logo: RegionalLogo; focus: boolean; showCpn: boolean }> = [];
+    const rows: Array<{ batch: RegionBatch; logo: RegionalLogo; focus: boolean }> = [];
     for (const batch of regionBatches(source.reads)) {
       const logo = mergedRegionalLogo(batch.reads, source.reference, source.center, region,
         source.filterQ, source.minimumQ);
-      rows.push({ batch, logo, focus: source.focus, showCpn: source.showCpn });
+      rows.push({ batch, logo, focus: source.focus });
     }
     logoRows.set(region.name, rows);
   }
@@ -144,10 +144,10 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
     ctx.textAlign = "right"; ctx.fillText(`${Math.round(region.end)} bp`, plotRight, zoomTop + zoomHeight - 19);
     ctx.textAlign = "left";
 
-    if (showLogo) (logoRows.get(region.name) ?? []).forEach(({ logo, focus, showCpn }, rowIndex) => {
+    if (showLogo) (logoRows.get(region.name) ?? []).forEach(({ logo, focus }, rowIndex) => {
       const rowTop = zoomTop + zoomHeight + rowIndex * logoHeight;
       const baseline = rowTop + logoHeight - 18;
-      const placements = logoPlacements(logo.columns, region, focus, showCpn, plotLeft, plotRight);
+      const placements = logoPlacements(logo.columns, region, focus, plotLeft, plotRight);
       ctx.fillStyle = "#2b4752"; ctx.font = "bold 13px sans-serif";
       ctx.fillText(`${region.name}区`, plotLeft + 5, rowTop + 20);
       if (!focus) {
@@ -158,9 +158,9 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
       ctx.strokeStyle = "#e5ebed"; ctx.lineWidth = 1; ctx.beginPath();
       ctx.moveTo(plotLeft, baseline); ctx.lineTo(plotRight, baseline); ctx.stroke();
       ctx.lineWidth = .8; ctx.setLineDash([2, 5]);
-      for (const { column, anchor, x: logoX, emphasized } of placements) {
+      for (const { anchor, x: logoX, emphasized } of placements) {
         if (!emphasized) continue;
-        ctx.strokeStyle = column.kind === "cpn" ? "#d6a66b" : "#aaccc2";
+        ctx.strokeStyle = "#aaccc2";
         ctx.beginPath(); ctx.moveTo(anchor, zoomTop + 42); ctx.lineTo(logoX, baseline); ctx.stroke();
       }
       ctx.setLineDash([]);
@@ -176,11 +176,6 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
             ctx.fillStyle = logoColors[base]; ctx.fillText(base, 0, 0); ctx.restore();
           }
           bottom -= glyphHeight;
-        }
-        if (column.kind === "cpn" && emphasized) {
-          ctx.fillStyle = "#bd8243"; ctx.font = "bold 9px Arial, sans-serif";
-          ctx.fillText("N", logoX, baseline + 11);
-          ctx.font = "900 100px Arial, sans-serif";
         }
       }
       ctx.restore(); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";

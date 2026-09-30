@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createCpgRows,
+  createCpnRows,
   mapToReference,
   mergeAnalysisResults,
   parseAbi,
@@ -73,6 +74,24 @@ test("matches sliding-window quality trimming and CpG calculations", () => {
   assert.equal(rows[0].averageC, 1);
   assert.equal(rows[0].targetNumber, 1);
   assert.equal(rows[0].targetStart, 2);
+});
+
+test("CpN uses independent original-reference mapping and excludes CpG or non-C calls", () => {
+  const reference = "ACGCCAT";
+  const firstInput = record(reference, Array(reference.length).fill(10));
+  firstInput.proportions[3] = { calledBase: "C", A: 0, C: .6, G: 0, T: .4 };
+  const secondInput = record(reference, Array(reference.length).fill(40));
+  secondInput.proportions[4] = { calledBase: "T", A: 0, C: .2, G: 0, T: .8 };
+  const first = { name: "first", ...mapToReference(reference, firstInput) };
+  const second = { name: "second", ...mapToReference(reference, secondInput) };
+  const merged = mergeAnalysisResults("batch", [first, second]);
+  const rows = createCpnRows(reference, [first, merged], "GCC");
+  assert.deepEqual(rows.map((row) => row.position), [4, 5]);
+  assert.equal(rows[0].averageC, .8);
+  assert.equal(rows[1].measuredSamples, 1);
+  assert.equal(rows[1].averageC, 1);
+  assert.equal(rows[0].distance, 0);
+  assert.throws(() => createCpnRows(reference, [first], "AAA"), /原始靶序列/);
 });
 
 test("creates a separate CpG distance series for every target site", () => {

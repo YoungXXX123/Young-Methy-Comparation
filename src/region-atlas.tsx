@@ -78,8 +78,7 @@ export function RegionAtlas({ datasets, comparison, regions, sources }: {
         <text x={plotRight} y={zoomTop + 179} textAnchor="end" fontSize="11" fill="#70898b">{Math.round(region.end)} bp</text>
         {(rows[region.name] ?? []).map(({ batch, logo }, rowIndex) => {
           const focus = source?.focus ?? true;
-          const showCpn = source?.showCpn ?? false;
-          const placements = logoPlacements(logo.columns, region, focus, showCpn, plotLeft, plotRight);
+          const placements = logoPlacements(logo.columns, region, focus, plotLeft, plotRight);
           const rowTop = logoTop + rowIndex * logoHeight, baseline = rowTop + 96;
           return <g key={`${batch.group}:${batch.batch}`} aria-label={`${region.name} ${batch.group} ${batch.batch}`}>
             <line x1={plotLeft} x2={plotRight} y1={baseline} y2={baseline} stroke="#e3ebe8" />
@@ -88,7 +87,7 @@ export function RegionAtlas({ datasets, comparison, regions, sources }: {
               Q {logo.meanQ === null ? "—" : logo.meanQ.toFixed(1)}</text>}
             {placements.filter(({ emphasized }) => emphasized).map(({ column, anchor, x }) =>
               <line key={`guide:${column.index}`} x1={anchor} x2={x} y1={zoomTop + 38} y2={baseline}
-                stroke={column.kind === "cpn" ? "#d6a66b" : "#a3c7be"} strokeWidth=".7" strokeDasharray="2 4" />)}
+                stroke="#a3c7be" strokeWidth=".7" strokeDasharray="2 4" />)}
             <g clipPath={`url(#logo-clip-${region.name})`}>
               {placements.map(({ column, x, width: letterWidth, emphasized }) => {
                 let bottom = baseline;
@@ -101,8 +100,6 @@ export function RegionAtlas({ datasets, comparison, regions, sources }: {
                       fontFamily="Arial, sans-serif" fontWeight="900" fontSize="100" fill={logoColors[base]}
                       transform={`translate(${x} ${y}) scale(${letterWidth / 72} ${glyphHeight / 73})`}>{base}</text>;
                   })}
-                  {column.kind === "cpn" && emphasized && <text x={x} y={baseline + 9} textAnchor="middle"
-                    fontSize="8" fontWeight="700" fill="#bd8243">N</text>}
                 </g>;
               })}
             </g>

@@ -11,19 +11,19 @@ export function logoLetters(column: LogoColumn): Array<{ base: Base; fraction: n
     .sort((a, b) => a.fraction - b.fraction);
 }
 
-export function logoPlacements(columns: LogoColumn[], region: Region, focus: boolean, showCpn: boolean,
+export function logoPlacements(columns: LogoColumn[], region: Region, focus: boolean,
   plotLeft: number, plotRight: number): LogoPlacement[] {
   const span = region.end - region.start;
   if (span <= 0) return [];
   const scale = (distance: number) => plotLeft + (distance - region.start) / span * (plotRight - plotLeft);
-  const selected = columns.filter((column) => !focus || column.kind === "cpg" || (showCpn && column.kind === "cpn"));
-  const targets = selected.filter((column) => column.kind === "cpg" || (showCpn && column.kind === "cpn"));
+  const selected = columns.filter((column) => !focus || column.kind === "cpg");
+  const targets = selected.filter((column) => column.kind === "cpg");
   const segments = focus ? focusSegments(targets.map((column) => column.distance), region) : [];
   const placed = selected.map((column) => {
     const segment = segments.find((item) => item.sites.includes(column.distance));
     return { column, anchor: scale(column.distance),
       x: segment ? focusSegmentPosition(column.distance, segment, region, plotRight, plotLeft, 0) : scale(column.distance),
-      emphasized: column.kind === "cpg" || (showCpn && column.kind === "cpn") };
+      emphasized: column.kind === "cpg" };
   });
   const sorted = [...placed].sort((a, b) => a.x - b.x);
   const closest = sorted.length > 1 ? Math.min(...sorted.slice(1).map((item, index) => item.x - sorted[index].x)) : 24;

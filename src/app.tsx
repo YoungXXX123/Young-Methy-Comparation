@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { analyzeFile, sanitizeSequence } from "./legacy-alignment";
+import { analyzeFile, createCpnRows, mergeAnalysisResults, sanitizeSequence, type CpgRow } from "./legacy-alignment";
 import { mergeAb1Batches } from "./ab1-workflow";
 import { datasetCsv, readSpreadsheet, type Dataset } from "./data";
 import { analyzeDatasets, type Comparison, type Marking, type Method } from "./statistics";
@@ -7,13 +7,16 @@ import { regionBatches, type Read, type Region } from "./ab1";
 import { clampBounds, fullBounds, SharedChart, type Bounds } from "./chart";
 import { RegionAtlas } from "./region-atlas";
 import { downloadReport, reportCanvas, type RegionSource, type ReportPart } from "./report";
+import { CpnResults } from "./cpn-results";
 
 type Ab1Entry = { id: string; file: File; group: string; batch: string; includeTable: boolean };
 type RegionAb1Entry = { id: string; file: File; group: string; batch: string };
 type RegionEvidence = { entries: RegionAb1Entry[]; reads: Read[]; uploadGroup: string; uploadBatch: string;
-  filterQ: boolean; minimumQ: number; focus: boolean; showCpn: boolean };
+  filterQ: boolean; minimumQ: number; focus: boolean };
 const emptyRegionEvidence = (): RegionEvidence => ({ entries: [], reads: [], uploadGroup: "", uploadBatch: "",
-  filterQ: false, minimumQ: 20, focus: true, showCpn: false });
+  filterQ: false, minimumQ: 20, focus: true });
+type CpnBatch = { group: string; batch: string; rows: CpgRow[] };
+type CpnRun = { reference: string; target: string; batches: CpnBatch[]; failures: string[] };
 const baseColors = { A: "#258f64", C: "#397dd3", G: "#3e485b", T: "#d54d57" };
 
 function saveText(text: string, filename: string) {
@@ -37,6 +40,12 @@ export default function App() {
   const [reads, setReads] = useState<Read[]>([]);
   const [referenceInput, setReferenceInput] = useState("");
   const [targetInput, setTargetInput] = useState("");
+  const [cpnEnabled, setCpnEnabled] = useState(false);
+  const [cpnDialogOpen, setCpnDialogOpen] = useState(false);
+  const [cpnReferenceInput, setCpnReferenceInput] = useState("");
+  const [cpnTargetInput, setCpnTargetInput] = useState("");
+  const [cpnMode, setCpnMode] = useState<"together" | "alone">("together");
+  const [cpnRun, setCpnRun] = useState<CpnRun | null>(null);
   const [trim, setTrim] = useState(false);
   const [qualityThreshold, setQualityThreshold] = useState(20);
   const [windowSize, setWindowSize] = useState(20);
@@ -65,6 +74,8 @@ export default function App() {
   const duplicateBatches = new Set(datasets.map((d) => `${d.group.trim()}\u0000${d.batch.trim()}`)).size !== datasets.length;
   const reference = useMemo(() => referenceSequence(referenceInput), [referenceInput]);
   const target = useMemo(() => sanitizeSequence(targetInput), [targetInput]);
+  const cpnReference = useMemo(() => referenceSequence(cpnReferenceInput), [cpnReferenceInput]);
+  const cpnTarget = useMemo(() => sanitizeSequence(cpnTargetInput), [cpnTargetInput]);
   const center = target && reference.includes(target) ? reference.indexOf(target) + (target.length - 1) / 2 : null;
   const regionReference = useMemo(() => referenceSequence(regionReferenceInput), [regionReferenceInput]);
   const regionTarget = useMemo(() => sanitizeSequence(regionTargetInput), [regionTargetInput]);
@@ -77,7 +88,7 @@ export default function App() {
     return [[region.name, { reads: evidence.entries.length ? evidence.reads : reads,
       reference: evidence.entries.length ? regionReference : reference,
       center: evidence.entries.length ? regionCenter : center,
-      filterQ: evidence.filterQ, minimumQ: evidence.minimumQ, focus: evidence.focus, showCpn: evidence.showCpn }]];
+      filterQ: evidence.filterQ, minimumQ: evidence.minimumQ, focus: evidence.focus }]];
   })), [regions, regionEvidence, regionReference, regionCenter, reads, reference, center]);
   const comparison = useMemo<Comparison | null>(() => {
     if (groups.length < 2 || useCompared.length < 2) return null;
@@ -106,6 +117,7 @@ export default function App() {
 
   const addAb1 = (files: FileList | null) => {
     if (!files?.length) return;
+    setCpnRun(null);
     const incoming = Array.from(files).filter((file) => /\.(ab1|abi)$/i.test(file.name));
     setAb1((current) => {
       const known = new Set(current.map((entry) => entry.id));
@@ -120,8 +132,10 @@ export default function App() {
 
   const updateTable = (id: string, key: "group" | "batch", value: string) =>
     setTables((current) => current.map((row) => row.id === id ? { ...row, [key]: value } : row));
-  const updateAb1 = (id: string, change: Partial<Ab1Entry>) =>
+  const updateAb1 = (id: string, change: Partial<Ab1Entry>) => {
+    setCpnRun(null);
     setAb1((current) => current.map((entry) => entry.id === id ? { ...entry, ...change } : entry));
+  };
 
   const updateRegionEvidence = (name: string, change: Partial<RegionEvidence>) =>
     setRegionEvidence((current) => ({ ...current, [name]: { ...(current[name] ?? emptyRegionEvidence()), ...change } }));
@@ -170,7 +184,8 @@ export default function App() {
   };
 
   const processAb1 = async () => {
-    setError("");
+    setError(""); setCpnRun(null);
+    if (cpnEnabled && cpnMode === "together" && !validateCpn()) return;
     if (!reference || reference.length < 50) { setError("请提供至少 50 bp 的参考 DNA 序列。"); return; }
     if (!target || reference.indexOf(target) < 0 || reference.indexOf(target) !== reference.lastIndexOf(target)) {
       setError("靶序列必须在参考序列中恰好出现一次，才能确定 distance=0。"); return;
@@ -189,9 +204,64 @@ export default function App() {
     const { datasets: next, failures: mergeFailures } = mergeAb1Batches(mapped,
       new Set(ab1.filter((entry) => entry.includeTable).map((entry) => entry.file)), reference, target);
     failures.push(...mergeFailures);
-    setReads(mapped); setGenerated(next); setBusy(false);
-    setNotice(`完成 ${mapped.length} 个读段比对，生成 ${next.length} 个独立批次的 CpG 表格；表格已直接进入比较。`);
+    setReads(mapped); setGenerated(next);
+    let cpnCompleted = false;
+    if (cpnEnabled && cpnMode === "together") {
+      try {
+        const cpn = await analyzeCpn();
+        setCpnRun(cpn);
+        cpnCompleted = true;
+        failures.push(...cpn.failures);
+      } catch (e) { failures.push(`CpN 比对失败：${e instanceof Error ? e.message : String(e)}`); }
+    }
+    setBusy(false);
+    setNotice(`完成 ${mapped.length} 个读段比对，生成 ${next.length} 个独立批次的 CpG 表格；表格已直接进入比较。${cpnCompleted ? "CpN 原始参考比对也已完成。" : ""}`);
     if (failures.length) setError(failures.join("；"));
+  };
+
+  const validateCpn = () => {
+    if (cpnReference.length < 50 || !cpnTarget || cpnReference.indexOf(cpnTarget) < 0 ||
+      cpnReference.indexOf(cpnTarget) !== cpnReference.lastIndexOf(cpnTarget)) {
+      setError("请在 CpN 窗口输入至少 50 bp 的原始参考序列，且原始靶序列必须恰好出现一次。");
+      setCpnDialogOpen(true);
+      return false;
+    }
+    if (!ab1.length || ab1.some((entry) => !entry.group.trim() || !entry.batch.trim())) {
+      setError("CpN 分析需要已上传的 AB1，且每条读段均需条件组和批次名称。");
+      return false;
+    }
+    return true;
+  };
+
+  const analyzeCpn = async (): Promise<CpnRun> => {
+    const mapped: Read[] = [], failures: string[] = [];
+    for (const entry of ab1) {
+      try {
+        const result = await analyzeFile(entry.file, cpnReference, trim, qualityThreshold, windowSize);
+        mapped.push({ file: entry.file, group: entry.group.trim(), batch: entry.batch.trim(), result });
+      } catch (e) { failures.push(`${entry.file.name}：${e instanceof Error ? e.message : String(e)}`); }
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+    const batches = regionBatches(mapped).map((batch) => {
+      const result = batch.reads.length === 1 ? batch.reads[0].result :
+        mergeAnalysisResults(batch.batch, batch.reads.map((read) => read.result));
+      return { group: batch.group, batch: batch.batch,
+        rows: createCpnRows(cpnReference, [result], cpnTarget) };
+    });
+    return { reference: cpnReference, target: cpnTarget, batches, failures };
+  };
+
+  const processCpn = async () => {
+    setError(""); setCpnRun(null);
+    if (!validateCpn()) return;
+    setBusy(true);
+    try {
+      const cpn = await analyzeCpn();
+      setCpnRun(cpn);
+      setNotice(`CpN 原始参考比对完成：${cpn.batches.length} 个样本/批次。`);
+      if (cpn.failures.length) setError(cpn.failures.join("；"));
+    } catch (e) { setError(`CpN 比对失败：${e instanceof Error ? e.message : String(e)}`); }
+    finally { setBusy(false); }
   };
 
   const saveRegion = () => {
@@ -244,7 +314,12 @@ export default function App() {
           <details><summary>原算法质量修剪设置</summary><label className="check"><input type="checkbox" checked={trim} onChange={(e) => setTrim(e.target.checked)} /> 启用滑窗 Phred 修剪</label>
             <div className="input-pair"><label>最低平均 Q<input type="number" min="1" max="60" value={qualityThreshold} onChange={(e) => setQualityThreshold(Number(e.target.value))} /></label>
               <label>窗口 bp<input type="number" min="3" max="100" value={windowSize} onChange={(e) => setWindowSize(Number(e.target.value))} /></label></div></details>
-          <button className="primary" disabled={busy || !ab1.length} onClick={() => void processAb1()}>{busy ? "正在处理…" : "比对 AB1 并生成 CpG 表格"}</button>
+          <label className="check"><input type="checkbox" checked={cpnEnabled} onChange={(e) => {
+            setCpnEnabled(e.target.checked); setCpnRun(null); if (e.target.checked) setCpnDialogOpen(true);
+          }} /> 启用可选 CpN 原始参考比对</label>
+          {cpnEnabled && <button className="secondary" onClick={() => setCpnDialogOpen(true)}>设置原始参考与展示方式</button>}
+          <button className="primary" disabled={busy || !ab1.length}
+            onClick={() => void (cpnEnabled && cpnMode === "alone" ? processCpn() : processAb1())}>{busy ? "正在处理…" : cpnEnabled && cpnMode === "alone" ? "仅比对 CpN" : cpnEnabled ? "比对 AB1 并生成 CpG / CpN 结果" : "比对 AB1 并生成 CpG 表格"}</button>
           </section>
         <section className="card"><h2><span>03</span> 比较规则</h2>
           <div className="field-title">参与检验的条件组</div>
@@ -290,12 +365,13 @@ export default function App() {
             {ab1.map((entry) => <tr key={entry.id}><td><span className="file-name" title={entry.file.name}>{entry.file.name}</span></td><td><input value={entry.group} onChange={(e) => updateAb1(entry.id, { group: e.target.value })} /></td>
               <td><input value={entry.batch} onChange={(e) => updateAb1(entry.id, { batch: e.target.value })} /></td>
               <td><input type="checkbox" checked={entry.includeTable} onChange={(e) => updateAb1(entry.id, { includeTable: e.target.checked })} /></td>
-              <td><button className="small" onClick={() => { setAb1((current) => current.filter((x) => x.id !== entry.id)); setReads([]); setGenerated([]); }}>移除</button></td></tr>)}</tbody></table></div></details>}
+              <td><button className="small" onClick={() => { setAb1((current) => current.filter((x) => x.id !== entry.id)); setReads([]); setGenerated([]); setCpnRun(null); }}>移除</button></td></tr>)}</tbody></table></div></details>}
           {generated.length > 0 && <div className="table-wrap"><h3>由原工具算法生成、已进入比较的表格</h3><table><thead><tr><th>条件组 / 批次</th><th>CpG</th><th>表格名</th><th>下载</th></tr></thead><tbody>
             {generated.map((d) => <tr key={d.id}><td>{d.group} / {d.batch}</td><td>{d.rows.length}</td><td>{d.file}</td>
               <td><button className="small" onClick={() => saveText(datasetCsv(d), `${d.group}_${d.batch}_CpG.csv`)}>CSV</button></td></tr>)}</tbody></table></div>}
         </section>
-        <section className="card"><div className="section-head"><div><div className="eyebrow">OVERVIEW</div><h2>共轴甲基化图谱</h2></div><span className="muted">横向拖动缩放 · 点击图后按 + / − 调整 · 双击复位</span></div>
+        {cpnRun && <CpnResults reference={cpnRun.reference} target={cpnRun.target} batches={cpnRun.batches} failures={cpnRun.failures} />}
+        {!(cpnEnabled && cpnMode === "alone") && <section className="card"><div className="section-head"><div><div className="eyebrow">OVERVIEW</div><h2>共轴甲基化图谱</h2></div><span className="muted">横向拖动缩放 · 点击图后按 + / − 调整 · 双击复位</span></div>
           {duplicateBatches && <p className="error">同一条件组出现重复批次名称；请在上方修改，以免把同一批次计为独立重复。</p>}
           {comparison ? <><div className="metrics"><div><strong>{comparison.groups.length}</strong><span>条件组</span></div><div><strong>{datasets.length}</strong><span>独立批次</span></div>
             <div><strong>{comparison.sites.length}</strong><span>CpG 坐标</span></div><div><strong>{comparison.sites.filter((s) => s.marked).length}</strong><span>红色星号</span></div></div>
@@ -306,8 +382,8 @@ export default function App() {
               sources={regionSources} />
               <div className="legend"><span style={{ color: baseColors.A }}>● A</span><span style={{ color: baseColors.C }}>● C</span>
                 <span style={{ color: baseColors.G }}>● G</span><span style={{ color: baseColors.T }}>● T</span></div></>}
-          </> : <p className="empty">至少导入两个条件组，图谱会在这里出现。</p>}</section>
-        {active && comparison && activeEvidence && <section className="card"><div className="section-head"><div><div className="eyebrow">REGIONAL EVIDENCE</div>
+          </> : <p className="empty">至少导入两个条件组，图谱会在这里出现。</p>}</section>}
+        {!(cpnEnabled && cpnMode === "alone") && active && comparison && activeEvidence && <section className="card"><div className="section-head"><div><div className="eyebrow">REGIONAL EVIDENCE</div>
           <h2>{active.name} · {Math.round(active.start)}–{Math.round(active.end)} bp</h2></div></div>
           <div className="region-inputs"><h3>为 {active.name} 补充 AB1 序列 logo</h3>
             <label>区域共用参考 DNA 序列（FASTA 或纯序列）<textarea rows={4} value={regionReferenceInput}
@@ -339,14 +415,26 @@ export default function App() {
                 onChange={(e) => updateRegionEvidence(active.name, { minimumQ: Math.max(0, Math.min(60, Number(e.target.value) || 0)) })} /></label>}
               <label className="check"><input type="checkbox" checked={activeEvidence.focus}
                 onChange={(e) => updateRegionEvidence(active.name, { focus: e.target.checked })} /> Focus：只显示 CpG 位点的 C/T logo</label>
-              <label className="check"><input type="checkbox" checked={activeEvidence.showCpn}
-                onChange={(e) => updateRegionEvidence(active.name, { showCpn: e.target.checked })} /> 显示非 CpG C（CpN）位点</label></div>
+              </div>
           </div>
-          <p className="hint">比对后，logo 显示在上方对应的局部图下方。CpG/CpN 按 C/T 峰高比例绘制；关闭 Focus 后，其他位点按四通道峰高比例浅色显示。</p></section>}
+          <p className="hint">比对后，logo 显示在上方对应的局部图下方。CpG 按 C/T 峰高比例绘制；关闭 Focus 后，其他位点按四通道峰高比例浅色显示。</p></section>}
         {preview && <section className="card"><div className="section-head"><div><div className="eyebrow">REPORT</div><h2>合并报告预览</h2></div></div>
           <img className="report-preview" src={preview} alt="甲基化与 AB1 logo 合并报告" />
-          <p className="hint">无测序信号的位置留白；区域 logo 按当前质控、Focus 与 CpN 选择生成。</p></section>}
+          <p className="hint">无测序信号的位置留白；区域 logo 按当前质控与 Focus 选择生成。</p></section>}
       </div>
     </main>
+    {cpnDialogOpen && <div className="cpn-dialog-backdrop"><div className="cpn-dialog" role="dialog" aria-modal="true" aria-labelledby="cpn-title">
+      <div className="section-head"><h2 id="cpn-title">CpN 原始参考比对</h2><button className="small" onClick={() => setCpnDialogOpen(false)}>关闭</button></div>
+      <p className="hint">与 CpG 共用上方的 AB1 文件和质量修剪设置。原始参考序列必须未经 bisulfite 转化。</p>
+      <label>原始参考 DNA 序列（FASTA 或纯序列）<textarea rows={6} value={cpnReferenceInput}
+        onChange={(e) => { setCpnReferenceInput(e.target.value); setCpnRun(null); }} placeholder=">original-reference\nACGT…" /></label>
+      <label>原始靶序列（在原始参考中恰好出现一次）<input value={cpnTargetInput}
+        onChange={(e) => { setCpnTargetInput(e.target.value); setCpnRun(null); }} placeholder="ACGT…" /></label>
+      <div className="cpn-mode"><label><input type="radio" name="cpn-mode" checked={cpnMode === "together"}
+        onChange={() => { setCpnMode("together"); setCpnRun(null); }} /> 与常规 CpG 一起呈现</label>
+        <label><input type="radio" name="cpn-mode" checked={cpnMode === "alone"}
+          onChange={() => { setCpnMode("alone"); setCpnRun(null); }} /> 仅分析并呈现 CpN</label></div>
+      <button className="primary" onClick={() => setCpnDialogOpen(false)}>保存设置</button>
+    </div></div>}
   </div>;
 }
