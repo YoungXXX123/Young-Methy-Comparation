@@ -3,8 +3,9 @@ import { analyzeFile, sanitizeSequence } from "./legacy-alignment";
 import { mergeAb1Batches } from "./ab1-workflow";
 import { datasetCsv, readSpreadsheet, type Dataset } from "./data";
 import { analyzeDatasets, type Comparison, type Marking, type Method } from "./statistics";
-import { FOCUS_SCALE, focusPosition, mergedRegionalTrace, regionBatches, type Read, type Region, type RegionalTrace, type TraceCurves, type RegionBatch } from "./ab1";
+import { regionBatches, type Read, type Region } from "./ab1";
 import { clampBounds, fullBounds, SharedChart, type Bounds } from "./chart";
+import { RegionAtlas } from "./region-atlas";
 import { downloadReport, reportCanvas, type RegionSource, type ReportPart } from "./report";
 
 type Ab1Entry = { id: string; file: File; group: string; batch: string; includeTable: boolean };
@@ -12,7 +13,7 @@ type RegionAb1Entry = { id: string; file: File; group: string; batch: string };
 type RegionEvidence = { entries: RegionAb1Entry[]; reads: Read[]; uploadGroup: string; uploadBatch: string;
   filterQ: boolean; minimumQ: number; focus: boolean };
 const emptyRegionEvidence = (): RegionEvidence => ({ entries: [], reads: [], uploadGroup: "", uploadBatch: "",
-  filterQ: false, minimumQ: 20, focus: false });
+  filterQ: false, minimumQ: 20, focus: true });
 const baseColors = { A: "#258f64", C: "#397dd3", G: "#3e485b", T: "#d54d57" };
 
 function saveText(text: string, filename: string) {
@@ -25,64 +26,6 @@ function saveText(text: string, filename: string) {
 function referenceSequence(input: string) {
   const body = input.trim().startsWith(">") ? input.split(/\r?\n/).filter((line) => !line.startsWith(">")).join("") : input;
   return sanitizeSequence(body);
-}
-
-function TraceSvg({ curves, bounds, label, focusSites = [] }: { curves: TraceCurves; bounds: [number, number]; label: string; focusSites?: number[] }) {
-  const width = 1000, left = 66, right = 24;
-  const focus = focusSites.length > 0, height = focus ? 230 : 190, baseline = focus ? 205 : 165;
-  let max = 1;
-  for (const base of ["A", "C", "G", "T"] as const) for (const point of curves[base]) {
-    if (Number.isFinite(point.x) && point.x >= bounds[0] && point.x <= bounds[1] && Number.isFinite(point.y)) max = Math.max(max, point.y);
-  }
-  const x = (value: number) => left + (value - bounds[0]) / (bounds[1] - bounds[0]) * (width - left - right);
-  const scaleRegion = { name: "focus", start: bounds[0], end: bounds[1] };
-  const y = (value: number) => baseline - value / max * 135 * (focus ? FOCUS_SCALE : 1);
-  const pathFor = (base: "A" | "C" | "G" | "T", site?: number) => {
-    const within: [number, number] = site === undefined ? bounds : [site - 2.5, site + 2.5];
-    let started = false, path = "";
-    for (const point of curves[base]) {
-      if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < within[0] || point.x > within[1]) { started = false; continue; }
-      const px = site === undefined ? x(point.x) : focusPosition(point.x, site, scaleRegion, width, left, right);
-      path += `${started ? "L" : "M"}${px.toFixed(1)},${y(point.y).toFixed(1)}`;
-      started = true;
-    }
-    return path;
-  };
-  return <svg className="trace-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label}>
-    <line x1={left} x2={width - right} y1={baseline + 1} y2={baseline + 1} stroke="#dbe4e8" />
-    {focus ? focusSites.map((site) => <g key={site}>
-      <line x1={x(site)} x2={x(site)} y1="15" y2={baseline} stroke="#e1e8e6" strokeDasharray="3 4">
-        <title>CpG {site.toFixed(1)} bp</title></line>
-      {(["A", "C", "G", "T"] as const).map((base) => <path key={base} d={pathFor(base, site)}
-        fill="none" stroke={baseColors[base]} strokeWidth="1.3" />)}
-    </g>) : (["A", "C", "G", "T"] as const).map((base) => <path key={base} d={pathFor(base)}
-      fill="none" stroke={baseColors[base]} strokeWidth="1.3" />)}
-    <text x={left} y={height - 7} className="chart-tick">{bounds[0].toFixed(1)} bp</text>
-    <text x={width - right} y={height - 7} textAnchor="end" className="chart-tick">{bounds[1].toFixed(1)} bp</text>
-  </svg>;
-}
-
-function TracePanel({ batch, region, reference, center, trim, threshold, windowSize, filterQ, minimumQ, focus }: {
-  batch: RegionBatch; region: Region; reference: string; center: number;
-  trim: boolean; threshold: number; windowSize: number; filterQ: boolean; minimumQ: number; focus: boolean;
-}) {
-  const [trace, setTrace] = useState<RegionalTrace | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let current = true;
-    setTrace(null); setError("");
-    mergedRegionalTrace(batch.reads, reference, center, region, trim, threshold, windowSize, filterQ, minimumQ, focus).then((value) => {
-      if (current) setTrace(value);
-    }).catch((e) => { if (current) setError(String(e)); });
-    return () => { current = false; };
-  }, [batch, region, reference, center, trim, threshold, windowSize, filterQ, minimumQ, focus]);
-  const title = `${region.name} · ${batch.group} · ${batch.batch} · Q ${trace?.meanQ === null || !trace ? "—" : trace.meanQ.toFixed(1)}`;
-  return <div className="trace-block"><h3>{title}</h3>
-    {error ? <p className="warning">峰图读取失败：{error}</p> : !trace ? <p className="muted">正在拼接 AB1 峰图…</p> : !trace.coveredBases || (focus && !trace.cpgSites.length) ?
-      <p className="empty-trace">此区域没有可展示的测序信号。</p> :
-        <div className="chart-scroller"><TraceSvg curves={trace.curves} bounds={[region.start, region.end]}
-          focusSites={focus ? trace.cpgSites : []} label={`${title} 拼接 AB1 峰图`} /></div>}
-  </div>;
 }
 
 export default function App() {
@@ -142,7 +85,7 @@ export default function App() {
     catch { return null; }
   }, [datasets, groups.join("\u0000"), useCompared.join("\u0000"), threshold, method, marking]);
   const full = useMemo(() => fullBounds(datasets), [datasets]);
-  useEffect(() => { setViewport(full); setStart(String(full[0])); setEnd(String(full[1])); }, [full[0], full[1]]);
+  useEffect(() => { setViewport(full); setStart(String(Math.round(full[0]))); setEnd(String(Math.round(full[1]))); }, [full[0], full[1]]);
   useEffect(() => { setPreview(""); }, [datasets, regions, reads, regionEvidence, regionReference, regionTarget, threshold, method, marking, compared]);
 
   const resetRegionReads = () => setRegionEvidence((current) => Object.fromEntries(
@@ -256,11 +199,12 @@ export default function App() {
     if (regions.length >= 12) { setError("最多保存 12 个区域。"); return; }
     const a = Number(start), b = Number(end);
     if (!Number.isFinite(a) || !Number.isFinite(b)) { setError("请输入有效的区域坐标。"); return; }
-    const [lo, hi] = clampBounds(a, b, full);
+    const bounded = clampBounds(Math.round(a), Math.round(b), full);
+    const lo = Math.round(bounded[0]), hi = Math.round(bounded[1]);
     const region = { name: `R${String(Math.max(0, ...regions.map((r) => Number(r.name.slice(1)))) + 1).padStart(2, "0")}`, start: lo, end: hi };
     setRegions((current) => [...current, region]); setSelectedRegion(region.name); setViewport([lo, hi]);
     setRegionEvidence((current) => ({ ...current, [region.name]: emptyRegionEvidence() }));
-    setNotice(`已保存 ${region.name}：${lo.toFixed(1)}–${hi.toFixed(1)} bp。`);
+    setNotice(`已保存 ${region.name}：${lo}–${hi} bp。`);
   };
 
   const exportFigure = async (part: ReportPart, format: "png" | "pdf", shouldPreview = false) => {
@@ -277,8 +221,6 @@ export default function App() {
 
   const active = regions.find((r) => r.name === selectedRegion) ?? regions[0];
   const activeEvidence = active ? regionEvidence[active.name] ?? emptyRegionEvidence() : null;
-  const activeSource = active ? regionSources[active.name] ?? { reads, reference, center, filterQ: false, minimumQ: 20, focus: false } : null;
-  const activeBatches = useMemo(() => regionBatches(activeSource?.reads ?? []), [activeSource?.reads]);
   const regionUploadGroup = activeEvidence?.uploadGroup || comparison?.groups[0] || "";
   const regionUploadBatch = activeEvidence?.uploadBatch || datasets.find((dataset) => dataset.group === regionUploadGroup)?.batch || "Batch_1";
   return <div className="app-shell">
@@ -318,7 +260,7 @@ export default function App() {
             <label>终点 bp<input type="number" value={end} onChange={(e) => setEnd(e.target.value)} /></label></div>
           <button className="secondary" onClick={saveRegion}>保存区域（最小 50 bp）</button>
           <div className="region-list">{regions.map((r) => <div key={r.name} className={`region-row ${active?.name === r.name ? "active" : ""}`}>
-            <button onClick={() => { setSelectedRegion(r.name); setViewport([r.start, r.end]); setStart(String(r.start)); setEnd(String(r.end)); }}>{r.name} · {r.start.toFixed(1)}–{r.end.toFixed(1)}</button>
+            <button onClick={() => { setSelectedRegion(r.name); setViewport([r.start, r.end]); setStart(String(Math.round(r.start))); setEnd(String(Math.round(r.end))); }}>{r.name} · {Math.round(r.start)}–{Math.round(r.end)}</button>
             <button aria-label={`删除 ${r.name}`} onClick={() => {
               setRegions((current) => current.filter((v) => v.name !== r.name));
               setRegionEvidence((current) => { const next = { ...current }; delete next[r.name]; return next; });
@@ -356,10 +298,14 @@ export default function App() {
             <div><strong>{comparison.sites.length}</strong><span>CpG 坐标</span></div><div><strong>{comparison.sites.filter((s) => s.marked).length}</strong><span>红色星号</span></div></div>
             <p className="chart-note">{comparison.inferential ? `${method === "welch" ? "Welch" : "单因素"} ANOVA · ${marking.toUpperCase()} < 0.05；星号是所选组的总体检验。`
               : `观察差异模式：所选组最大均值差 > ${threshold} 个百分点；不显示 P 值。`}</p>
-            <SharedChart datasets={datasets} comparison={comparison} viewport={viewport} setViewport={(v) => { setViewport(v); setStart(String(v[0])); setEnd(String(v[1])); }} regions={regions} />
+            <SharedChart datasets={datasets} comparison={comparison} viewport={viewport} setViewport={(v) => { setViewport(v); setStart(String(Math.round(v[0]))); setEnd(String(Math.round(v[1]))); }} regions={regions} />
+            {regions.length > 0 && <><RegionAtlas datasets={datasets} comparison={comparison} regions={regions}
+              sources={regionSources} trim={trim} qualityThreshold={qualityThreshold} windowSize={windowSize} />
+              <div className="legend"><span style={{ color: baseColors.A }}>● A</span><span style={{ color: baseColors.C }}>● C</span>
+                <span style={{ color: baseColors.G }}>● G</span><span style={{ color: baseColors.T }}>● T</span></div></>}
           </> : <p className="empty">至少导入两个条件组，图谱会在这里出现。</p>}</section>
-        {active && comparison && activeEvidence && activeSource && <section className="card"><div className="section-head"><div><div className="eyebrow">REGIONAL EVIDENCE</div>
-          <h2>{active.name} · {active.start.toFixed(1)}–{active.end.toFixed(1)} bp</h2></div></div>
+        {active && comparison && activeEvidence && <section className="card"><div className="section-head"><div><div className="eyebrow">REGIONAL EVIDENCE</div>
+          <h2>{active.name} · {Math.round(active.start)}–{Math.round(active.end)} bp</h2></div></div>
           <div className="region-inputs"><h3>为 {active.name} 补充 AB1 峰图</h3>
             <label>区域共用参考 DNA 序列（FASTA 或纯序列）<textarea rows={4} value={regionReferenceInput}
               onChange={(e) => { setRegionReferenceInput(e.target.value); resetRegionReads(); }} placeholder=">reference\nACGT…" /></label>
@@ -388,15 +334,9 @@ export default function App() {
               {activeEvidence.filterQ && <label>最低 Phred Q<input type="number" min="0" max="60" value={activeEvidence.minimumQ}
                 onChange={(e) => updateRegionEvidence(active.name, { minimumQ: Math.max(0, Math.min(60, Number(e.target.value) || 0)) })} /></label>}
               <label className="check"><input type="checkbox" checked={activeEvidence.focus}
-                onChange={(e) => updateRegionEvidence(active.name, { focus: e.target.checked })} /> Focus：CpG C 位点及左右各 2 bp，原位放大 1.35 倍</label></div>
+                onChange={(e) => updateRegionEvidence(active.name, { focus: e.target.checked })} /> Focus：CpG C 位点及左右各 2 bp，仅横向拉宽 1.8 倍</label></div>
           </div>
-          {activeSource.center !== null && activeBatches.length ? activeBatches.map((batch) =>
-            <TracePanel key={`${active.name}:${batch.group}:${batch.batch}`} batch={batch} region={active}
-              reference={activeSource.reference} center={activeSource.center!} trim={trim} threshold={qualityThreshold}
-              windowSize={windowSize} filterQ={activeSource.filterQ} minimumQ={activeSource.minimumQ} focus={activeSource.focus} />) :
-            <p className="empty-trace">尚未生成此区域的 AB1 峰图。</p>}
-          <div className="legend"><span style={{ color: baseColors.A }}>● A</span><span style={{ color: baseColors.C }}>● C</span>
-            <span style={{ color: baseColors.G }}>● G</span><span style={{ color: baseColors.T }}>● T</span></div></section>}
+          <p className="hint">比对后，峰图显示在上方对应的局部图下方。</p></section>}
         {preview && <section className="card"><div className="section-head"><div><div className="eyebrow">REPORT</div><h2>合并报告预览</h2></div></div>
           <img className="report-preview" src={preview} alt="甲基化与 AB1 合并报告" />
           <p className="hint">无测序信号的位置留白；区域峰图按当前质控与 Focus 选择生成。</p></section>}

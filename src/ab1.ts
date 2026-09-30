@@ -7,7 +7,7 @@ export type TraceCurves = Record<Base, TracePoint[]>;
 export type ChosenRead = { read: Read; score: number; coverage: number; meanQ: number; curves?: TraceCurves };
 export type RegionBatch = { group: string; batch: string; reads: Read[] };
 export type RegionalTrace = { curves: TraceCurves; cpgSites: number[]; meanQ: number | null; coveredBases: number };
-export const FOCUS_SCALE = 1.35;
+export const FOCUS_X_STRETCH = 1.8;
 
 const bases: Base[] = ["A", "C", "G", "T"];
 const complement: Record<Base, Base> = { A: "T", T: "A", C: "G", G: "C" };
@@ -58,22 +58,21 @@ export function cpgDistances(reference: string, region: Region, center: number):
 
 export function focusPosition(value: number, site: number, region: Region, width: number, left: number, right: number) {
   const base = (distance: number) => left + (distance - region.start) / (region.end - region.start) * (width - left - right);
-  return base(site) + FOCUS_SCALE * (base(value) - base(site));
+  return base(site) + FOCUS_X_STRETCH * (base(value) - base(site));
 }
 
 export async function mergedRegionalTrace(reads: Read[], reference: string, center: number, region: Region,
-  trim: boolean, trimQ: number, windowSize: number, filterQ: boolean, minimumQ: number, focus: boolean): Promise<RegionalTrace> {
+  trim: boolean, trimQ: number, windowSize: number, filterQ: boolean, minimumQ: number, _focus: boolean): Promise<RegionalTrace> {
   const curves = blankCurves();
   if (!reads.length) return { curves, cpgSites: [], meanQ: null, coveredBases: 0 };
   const { result, owners } = mergedSiteOwners(reads);
   const cpg = cpgDistances(reference, region, center);
-  const focusIndices = new Set(focus ? cpg.flatMap(({ index }) => [index - 2, index - 1, index, index + 1, index + 2]) : []);
   const selected = new Map<Read, Set<number>>();
   const qualities: number[] = [];
   const allowed = new Set<number>();
   for (const index of result.mappedIndices) {
     const distance = index - center;
-    if (distance < region.start || distance > region.end || (focus && !focusIndices.has(index))) continue;
+    if (distance < region.start || distance > region.end) continue;
     const owner = owners.get(index);
     if (!owner) continue;
     const q = result.mappedQuality.get(index);

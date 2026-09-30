@@ -36,9 +36,9 @@ test("focus identifies CpG C positions inside the selected region", () => {
   assert.deepEqual(sites.map((site) => site.distance), [-3, 2]);
 });
 
-test("1.35x focus expansion keeps each CpG anchored to the zoom plot", () => {
+test("horizontal-only focus stretch keeps each CpG anchored to the zoom plot", () => {
   const region = { name: "R02", start: -50, end: 50 };
   assert.equal(focusPosition(0, 0, region, 1000, 66, 24), 521);
-  assert.equal(focusPosition(1, 0, region, 1000, 66, 24).toFixed(3), "533.285");
-  assert.equal(focusPosition(-1, 0, region, 1000, 66, 24).toFixed(3), "508.715");
+  assert.equal(focusPosition(1, 0, region, 1000, 66, 24).toFixed(3), "537.380");
+  assert.equal(focusPosition(-1, 0, region, 1000, 66, 24).toFixed(3), "504.620");
 });
