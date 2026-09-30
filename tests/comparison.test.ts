@@ -3,6 +3,9 @@ import test from "node:test";
 import { analyzeDatasets, bh, oneWay } from "../src/statistics";
 import { clampBounds } from "../src/chart";
 import { fromCpgRows, tableRows, type Dataset } from "../src/data";
+import { mergeAb1Batches } from "../src/ab1-workflow";
+import { mapToReference, type Base, type BaseProportion } from "../src/legacy-alignment";
+import type { Read } from "../src/ab1";
 
 const make = (group: string, batch: number, values: Array<number | null>): Dataset => ({
   id: `${group}${batch}`, source: "table", file: `${group}${batch}.csv`, sheet: "", group, batch: `batch_${batch}`,
@@ -59,4 +62,26 @@ test("duplicate batch names cannot inflate independent sample count", () => {
 test("main view never narrows below 50 bp", () => {
   assert.deepEqual(clampBounds(20, 30, [-100, 200]), [0, 50]);
   assert.deepEqual(clampBounds(180, 190, [-100, 200]), [150, 200]);
+});
+
+test("same-group AB1 reads form one batch table with higher-Q overlap", () => {
+  const reference = "AACGTTCCGAA";
+  const makeRead = (name: string, batch: string, c: number, quality: number): Read => {
+    const proportions = [...reference].map((base) => ({ calledBase: base as Base,
+      A: base === "A" ? 1 : 0, C: base === "C" ? 1 : 0,
+      G: base === "G" ? 1 : 0, T: base === "T" ? 1 : 0 })) as BaseProportion[];
+    proportions[2] = { calledBase: "C", A: 0, C: c, G: 0, T: 1 - c };
+    const result = mapToReference(reference, { sequence: reference,
+      quality: Array(reference.length).fill(quality), proportions });
+    return { file: new File([], name), group: "DNMT3a", batch, result: { name, ...result } };
+  };
+  const low = makeRead("forward.ab1", "batch_1", .2, 20);
+  const high = makeRead("reverse.ab1", "batch_1", .8, 40);
+  const merged = mergeAb1Batches([low, high], new Set([low.file, high.file]), reference, "ACGTT");
+  assert.deepEqual(merged.failures, []);
+  assert.equal(merged.datasets.length, 1);
+  assert.equal(merged.datasets[0].rows.find((row) => row.position === 3)?.value, .8);
+  const separate = mergeAb1Batches([low, { ...high, batch: "batch_2" }],
+    new Set([low.file, high.file]), reference, "ACGTT");
+  assert.equal(separate.datasets.length, 2);
 });

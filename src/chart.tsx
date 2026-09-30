@@ -62,8 +62,8 @@ export function SharedChart({ datasets, comparison, viewport, setViewport, regio
   const xValue = (pixel: number) => viewport[0] + (pixel - left) / (width - left - right) * (viewport[1] - viewport[0]);
   const ticks = Array.from({ length: 7 }, (_, i) => viewport[0] + (viewport[1] - viewport[0]) * i / 6);
   return <div className="chart-scroller"><svg ref={ref} className="main-chart" viewBox={`0 0 ${width} ${height}`}
-    role="img" aria-label="各组共享横坐标的甲基化比例图；拖动缩放，双击显示全长"
-    onPointerDown={(event) => { drag.current = cursorX(event.clientX); setDragEnd(drag.current); event.currentTarget.setPointerCapture(event.pointerId); }}
+    role="img" tabIndex={0} aria-label="各组共享横坐标的甲基化比例图；拖动选择区域，按加号或减号缩放，双击显示全长"
+    onPointerDown={(event) => { event.currentTarget.focus(); drag.current = cursorX(event.clientX); setDragEnd(drag.current); event.currentTarget.setPointerCapture(event.pointerId); }}
     onPointerMove={(event) => { if (drag.current !== null) setDragEnd(cursorX(event.clientX)); }}
     onPointerUp={(event) => { if (drag.current !== null) {
       const end = cursorX(event.clientX);
@@ -71,11 +71,15 @@ export function SharedChart({ datasets, comparison, viewport, setViewport, regio
       drag.current = null; setDragEnd(null);
     } }}
     onDoubleClick={() => setViewport(full)}
-    onWheel={(event) => {
-      const factor = event.deltaY > 0 ? 1.18 : 0.82;
-      const center = xValue(cursorX(event.clientX));
-      setViewport(clampBounds(center - (center - viewport[0]) * factor,
-        center + (viewport[1] - center) * factor, full));
+    onKeyDown={(event) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const factor = ["+", "="].includes(event.key) || event.code === "NumpadAdd" ? 0.82 :
+        ["-", "_"].includes(event.key) || event.code === "NumpadSubtract" ? 1.18 : null;
+      if (factor === null) return;
+      event.preventDefault();
+      const center = (viewport[0] + viewport[1]) / 2;
+      const half = (viewport[1] - viewport[0]) * factor / 2;
+      setViewport(clampBounds(center - half, center + half, full));
     }}>
     {comparison.groups.map((group, index) => {
       const top = panelTop + index * panelHeight;

@@ -4,6 +4,7 @@ import { chooseRead, chromatogram, type Read, type Region } from "./ab1";
 import { colors, fullBounds, groupSeries, type Bounds } from "./chart";
 
 export type ReportPart = "combined" | "main" | "traces";
+export type RegionSource = { reads: Read[]; reference: string; center: number | null };
 const nucleotides = ["A", "C", "G", "T"] as const;
 const signalColors = { A: "#258f64", C: "#397dd3", G: "#3e485b", T: "#d54d57" };
 
@@ -17,7 +18,8 @@ function saveBlob(blob: Blob, filename: string) {
 
 export async function reportCanvas(datasets: Dataset[], comparison: Comparison, regions: Region[], reads: Read[],
   reference: string, center: number | null, part: ReportPart = "combined",
-  trim = false, qualityThreshold = 20, windowSize = 20): Promise<HTMLCanvasElement> {
+  trim = false, qualityThreshold = 20, windowSize = 20,
+  regionSources: Record<string, RegionSource> = {}): Promise<HTMLCanvasElement> {
   const width = 1600, left = 108, right = 64, header = 112, footer = 90;
   const full = fullBounds(datasets);
   const showMain = part !== "traces", showTraces = part !== "main";
@@ -107,17 +109,18 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
 
   if (showTraces) {
     for (const r of regions) {
+      const source = regionSources[r.name] ?? { reads, reference, center };
       for (const group of comparison.groups) {
-        const chosen = center !== null ? chooseRead(reads, group, r, center) : null;
+        const chosen = source.center !== null ? chooseRead(source.reads, group, r, source.center) : null;
         ctx.fillStyle = "#2b4752"; ctx.font = "17px sans-serif";
         ctx.fillText(`${r.name} · ${r.start}–${r.end} bp · ${group}${chosen ? ` · ${chosen.read.file.name} · Q ${chosen.meanQ.toFixed(1)} · 覆盖 ${(chosen.coverage * 100).toFixed(0)}%` : ""}`, left, top + 20);
         ctx.strokeStyle = "#e5ebed"; ctx.beginPath(); ctx.moveTo(left, top + traceHeight - 18);
         ctx.lineTo(width - right, top + traceHeight - 18); ctx.stroke();
-        if (!chosen || !reference) {
+        if (!chosen || !source.reference) {
           ctx.fillStyle = "#98a5aa"; ctx.font = "16px sans-serif";
           ctx.fillText("尚无覆盖此区域且通过质控的 AB1 原始峰图", left + 420, top + 80);
         } else {
-          const curves = await chromatogram(chosen.read, reference, center!, r, trim, qualityThreshold, windowSize);
+          const curves = await chromatogram(chosen.read, source.reference, source.center!, r, trim, qualityThreshold, windowSize);
           let maximum = 1;
           for (const base of nucleotides) for (const point of curves[base]) {
             if (Number.isFinite(point.y)) maximum = Math.max(maximum, point.y);
