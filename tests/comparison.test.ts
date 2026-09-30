@@ -80,6 +80,7 @@ test("same-group AB1 reads form one batch table with higher-Q overlap", () => {
   const merged = mergeAb1Batches([low, high], new Set([low.file, high.file]), reference, "ACGTT");
   assert.deepEqual(merged.failures, []);
   assert.equal(merged.datasets.length, 1);
+  assert.equal(merged.datasets[0].file, "DNMT3a_batch_1.csv");
   assert.equal(merged.datasets[0].rows.find((row) => row.position === 3)?.value, .8);
   const separate = mergeAb1Batches([low, { ...high, batch: "batch_2" }],
     new Set([low.file, high.file]), reference, "ACGTT");

@@ -8,6 +8,7 @@ export type ChosenRead = { read: Read; score: number; coverage: number; meanQ: n
 export type RegionBatch = { group: string; batch: string; reads: Read[] };
 export type RegionalTrace = { curves: TraceCurves; cpgSites: number[]; meanQ: number | null; coveredBases: number };
 export const FOCUS_X_STRETCH = 1.8;
+const FOCUS_HALF_WINDOW = 2.5;
 
 const bases: Base[] = ["A", "C", "G", "T"];
 const complement: Record<Base, Base> = { A: "T", T: "A", C: "G", G: "C" };
@@ -59,6 +60,38 @@ export function cpgDistances(reference: string, region: Region, center: number):
 export function focusPosition(value: number, site: number, region: Region, width: number, left: number, right: number) {
   const base = (distance: number) => left + (distance - region.start) / (region.end - region.start) * (width - left - right);
   return base(site) + FOCUS_X_STRETCH * (base(value) - base(site));
+}
+
+export type FocusSegment = { start: number; end: number; sites: number[] };
+
+function focusProjection(segment: FocusSegment, region: Region) {
+  const anchor = (segment.start + segment.end) / 2;
+  const scale = Math.min(FOCUS_X_STRETCH, (region.end - region.start) / (segment.end - segment.start));
+  const start = anchor + (segment.start - anchor) * scale;
+  const end = anchor + (segment.end - anchor) * scale;
+  const shift = start < region.start ? region.start - start : end > region.end ? region.end - end : 0;
+  return { anchor, scale, shift, start: start + shift, end: end + shift };
+}
+
+export function focusSegments(cpgSites: number[], region: Region): FocusSegment[] {
+  const sites = [...new Set(cpgSites)].sort((a, b) => a - b);
+  const segments: FocusSegment[] = [];
+  for (const site of sites) {
+    segments.push({ start: site - FOCUS_HALF_WINDOW, end: site + FOCUS_HALF_WINDOW, sites: [site] });
+    while (segments.length > 1) {
+      const right = segments[segments.length - 1], left = segments[segments.length - 2];
+      if (focusProjection(left, region).end < focusProjection(right, region).start) break;
+      segments.splice(-2, 2, { start: left.start, end: right.end, sites: [...left.sites, ...right.sites] });
+    }
+  }
+  return segments;
+}
+
+export function focusSegmentPosition(value: number, segment: FocusSegment, region: Region,
+  width: number, left: number, right: number) {
+  const { anchor, scale, shift } = focusProjection(segment, region);
+  const projected = anchor + (value - anchor) * scale + shift;
+  return left + (projected - region.start) / (region.end - region.start) * (width - left - right);
 }
 
 export async function mergedRegionalTrace(reads: Read[], reference: string, center: number, region: Region,

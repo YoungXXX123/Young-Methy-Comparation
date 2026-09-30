@@ -16,7 +16,7 @@ export function mergeAb1Batches(reads: Read[], includedFiles: ReadonlySet<File>,
       const source: AnalysisResult = entries.length === 1 ? entries[0].result :
         mergeAnalysisResults(batch, entries.map((item) => item.result));
       const rows = createCpgRows(reference, [source], target);
-      datasets.push(fromCpgRows(rows, group, batch, entries.map((item) => item.file.name).join(" + ")));
+      datasets.push(fromCpgRows(rows, group, batch, `${group}_${batch}.csv`));
     } catch (e) { failures.push(`${key}：${e instanceof Error ? e.message : String(e)}`); }
   }
   return { datasets, failures };

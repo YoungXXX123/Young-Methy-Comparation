@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Dataset } from "./data";
 import type { Comparison } from "./statistics";
-import { focusPosition, mergedRegionalTrace, regionBatches, type Region, type RegionalTrace, type RegionBatch, type TraceCurves } from "./ab1";
+import { focusSegmentPosition, focusSegments, mergedRegionalTrace, regionBatches,
+  type FocusSegment, type Region, type RegionalTrace, type RegionBatch, type TraceCurves } from "./ab1";
 import { colors, fullBounds, groupSeries } from "./chart";
 import { regionCanvasWidth, regionColumns } from "./region-layout";
 import type { RegionSource } from "./report";
@@ -39,13 +40,13 @@ export function RegionAtlas({ datasets, comparison, regions, sources, trim, qual
   const overviewX = (value: number) => left + (value - full[0]) / (full[1] - full[0]) * (width - left - right);
 
   function tracePath(curves: TraceCurves, base: typeof nucleotides[number], region: Region,
-    plotLeft: number, plotRight: number, baseline: number, max: number, site?: number) {
+    plotLeft: number, plotRight: number, baseline: number, max: number, segment?: FocusSegment) {
     let started = false, path = "";
     for (const point of curves[base]) {
       if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < region.start || point.x > region.end ||
-        (site !== undefined && (point.x < site - 2.5 || point.x > site + 2.5))) { started = false; continue; }
+        (segment && (point.x < segment.start || point.x > segment.end))) { started = false; continue; }
       const rawX = plotLeft + (point.x - region.start) / (region.end - region.start) * (plotRight - plotLeft);
-      const x = site === undefined ? rawX : focusPosition(point.x, site, region, width, plotLeft, width - plotRight);
+      const x = segment ? focusSegmentPosition(point.x, segment, region, width, plotLeft, width - plotRight) : rawX;
       const y = baseline - point.y / max * 76;
       path += `${started ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
       started = true;
@@ -95,6 +96,7 @@ export function RegionAtlas({ datasets, comparison, regions, sources, trim, qual
         <text x={plotRight} y={zoomTop + 179} textAnchor="end" fontSize="11" fill="#70898b">{Math.round(region.end)} bp</text>
         {(rows[region.name] ?? []).map(({ batch, trace }, rowIndex) => {
           const focus = source?.focus ?? true;
+          const segments = focus ? focusSegments(trace.cpgSites, region) : [];
           const rowTop = traceTop + rowIndex * traceHeight, baseline = rowTop + 99;
           let max = 1;
           for (const base of nucleotides) for (const point of trace.curves[base]) {
@@ -105,11 +107,12 @@ export function RegionAtlas({ datasets, comparison, regions, sources, trim, qual
             <text x={plotLeft + 5} y={rowTop + 15} fontSize="11" fontWeight="700" fill="#294f50">{region.name}区</text>
             {!focus && <text x={plotRight} y={rowTop + 15} textAnchor="end" fontSize="11" fill="#76908e">
               Q {trace.meanQ === null ? "—" : trace.meanQ.toFixed(1)}</text>}
-            {focus && trace.cpgSites.map((site) => <line key={site} x1={scale(site)} x2={scale(site)}
-              y1={zoomTop + 38} y2={baseline} stroke="#a3c7be" strokeWidth=".7" strokeDasharray="2 4" />)}
+            {segments.flatMap((segment) => segment.sites.map((site) => <line key={site} x1={scale(site)}
+              x2={focusSegmentPosition(site, segment, region, width, plotLeft, width - plotRight)}
+              y1={zoomTop + 38} y2={baseline} stroke="#a3c7be" strokeWidth=".7" strokeDasharray="2 4" />))}
             <g clipPath={`url(#trace-clip-${region.name})`}>
-              {nucleotides.map((base) => focus ? trace.cpgSites.map((site) =>
-                <path key={`${base}:${site}`} d={tracePath(trace.curves, base, region, plotLeft, plotRight, baseline, max, site)}
+              {nucleotides.map((base) => focus ? segments.map((segment) =>
+                <path key={`${base}:${segment.start}`} d={tracePath(trace.curves, base, region, plotLeft, plotRight, baseline, max, segment)}
                   stroke={signalColors[base]} strokeWidth="1.2" fill="none" />) :
                 <path key={base} d={tracePath(trace.curves, base, region, plotLeft, plotRight, baseline, max)}
                   stroke={signalColors[base]} strokeOpacity=".28" strokeWidth="1" fill="none" />)}

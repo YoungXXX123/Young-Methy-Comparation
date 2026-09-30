@@ -221,6 +221,8 @@ export default function App() {
 
   const active = regions.find((r) => r.name === selectedRegion) ?? regions[0];
   const activeEvidence = active ? regionEvidence[active.name] ?? emptyRegionEvidence() : null;
+  const ab1BatchCount = new Set(ab1.map((entry) => `${entry.group}\u0000${entry.batch}`)).size;
+  const regionAb1BatchCount = new Set(activeEvidence?.entries.map((entry) => `${entry.group}\u0000${entry.batch}`)).size;
   const regionUploadGroup = activeEvidence?.uploadGroup || comparison?.groups[0] || "";
   const regionUploadBatch = activeEvidence?.uploadBatch || datasets.find((dataset) => dataset.group === regionUploadGroup)?.batch || "Batch_1";
   return <div className="app-shell">
@@ -283,12 +285,13 @@ export default function App() {
               <td><input value={d.group} onChange={(e) => updateTable(d.id, "group", e.target.value)} /></td>
               <td><input value={d.batch} onChange={(e) => updateTable(d.id, "batch", e.target.value)} /></td>
               <td>{d.rows.length}</td><td><button className="small" onClick={() => setTables((current) => current.filter((row) => row.id !== d.id))}>移除</button></td></tr>)}</tbody></table></div>}
-          {ab1.length > 0 && <div className="table-wrap"><h3>AB1 读段归组</h3><table><thead><tr><th>文件</th><th>条件组</th><th>独立批次</th><th>加入比较</th><th></th></tr></thead><tbody>
-            {ab1.map((entry) => <tr key={entry.id}><td>{entry.file.name}</td><td><input value={entry.group} onChange={(e) => updateAb1(entry.id, { group: e.target.value })} /></td>
+          {ab1.length > 0 && <details className="ab1-details"><summary>已选择 {ab1.length} 个 AB1，分属 {ab1BatchCount} 个组/批次 · 查看或调整读段</summary>
+            <div className="table-wrap"><table><thead><tr><th>文件</th><th>条件组</th><th>独立批次</th><th>加入比较</th><th></th></tr></thead><tbody>
+            {ab1.map((entry) => <tr key={entry.id}><td><span className="file-name" title={entry.file.name}>{entry.file.name}</span></td><td><input value={entry.group} onChange={(e) => updateAb1(entry.id, { group: e.target.value })} /></td>
               <td><input value={entry.batch} onChange={(e) => updateAb1(entry.id, { batch: e.target.value })} /></td>
               <td><input type="checkbox" checked={entry.includeTable} onChange={(e) => updateAb1(entry.id, { includeTable: e.target.checked })} /></td>
-              <td><button className="small" onClick={() => { setAb1((current) => current.filter((x) => x.id !== entry.id)); setReads([]); setGenerated([]); }}>移除</button></td></tr>)}</tbody></table></div>}
-          {generated.length > 0 && <div className="table-wrap"><h3>由原工具算法生成、已进入比较的表格</h3><table><thead><tr><th>条件组 / 批次</th><th>CpG</th><th>来源</th><th>下载</th></tr></thead><tbody>
+              <td><button className="small" onClick={() => { setAb1((current) => current.filter((x) => x.id !== entry.id)); setReads([]); setGenerated([]); }}>移除</button></td></tr>)}</tbody></table></div></details>}
+          {generated.length > 0 && <div className="table-wrap"><h3>由原工具算法生成、已进入比较的表格</h3><table><thead><tr><th>条件组 / 批次</th><th>CpG</th><th>表格名</th><th>下载</th></tr></thead><tbody>
             {generated.map((d) => <tr key={d.id}><td>{d.group} / {d.batch}</td><td>{d.rows.length}</td><td>{d.file}</td>
               <td><button className="small" onClick={() => saveText(datasetCsv(d), `${d.group}_${d.batch}_CpG.csv`)}>CSV</button></td></tr>)}</tbody></table></div>}
         </section>
@@ -318,15 +321,16 @@ export default function App() {
                 onChange={(e) => updateRegionEvidence(active.name, { uploadBatch: e.target.value })} /></label></div>
             <label className="upload-box">＋ 上传 {active.name} 的 AB1（可多选）<input type="file" accept=".ab1,.abi" multiple
               onChange={(e) => { addRegionAb1(active.name, e.target.files); e.target.value = ""; }} /></label>
-            {activeEvidence.entries.length > 0 && <div className="table-wrap"><table><thead><tr><th>AB1 文件</th><th>样本</th><th>批次编号</th><th></th></tr></thead><tbody>
-              {activeEvidence.entries.map((entry) => <tr key={entry.id}><td>{entry.file.name}</td><td><select value={entry.group}
+            {activeEvidence.entries.length > 0 && <details className="ab1-details"><summary>已选择 {activeEvidence.entries.length} 个 AB1，分属 {regionAb1BatchCount} 个样本/批次 · 查看或调整读段</summary>
+              <div className="table-wrap"><table><thead><tr><th>AB1 文件</th><th>样本</th><th>批次编号</th><th></th></tr></thead><tbody>
+              {activeEvidence.entries.map((entry) => <tr key={entry.id}><td><span className="file-name" title={entry.file.name}>{entry.file.name}</span></td><td><select value={entry.group}
                 onChange={(e) => updateRegionEvidence(active.name, { entries: activeEvidence.entries.map((item) =>
                   item.id === entry.id ? { ...item, group: e.target.value } : item), reads: [] })}>
                 {comparison.groups.map((group) => <option key={group} value={group}>{group}</option>)}</select></td>
                 <td><input value={entry.batch} onChange={(e) => updateRegionEvidence(active.name, { entries: activeEvidence.entries.map((item) =>
                   item.id === entry.id ? { ...item, batch: e.target.value } : item), reads: [] })} /></td>
                 <td><button className="small" onClick={() => updateRegionEvidence(active.name, {
-                  entries: activeEvidence.entries.filter((item) => item.id !== entry.id), reads: [] })}>移除</button></td></tr>)}</tbody></table></div>}
+                  entries: activeEvidence.entries.filter((item) => item.id !== entry.id), reads: [] })}>移除</button></td></tr>)}</tbody></table></div></details>}
             <button className="primary" disabled={busy || !activeEvidence.entries.length}
               onClick={() => void processRegionAb1(active.name)}>{busy ? "正在处理…" : `比对并显示 ${active.name} 峰图`}</button>
             <div className="region-options"><label className="check"><input type="checkbox" checked={activeEvidence.filterQ}
@@ -334,7 +338,7 @@ export default function App() {
               {activeEvidence.filterQ && <label>最低 Phred Q<input type="number" min="0" max="60" value={activeEvidence.minimumQ}
                 onChange={(e) => updateRegionEvidence(active.name, { minimumQ: Math.max(0, Math.min(60, Number(e.target.value) || 0)) })} /></label>}
               <label className="check"><input type="checkbox" checked={activeEvidence.focus}
-                onChange={(e) => updateRegionEvidence(active.name, { focus: e.target.checked })} /> Focus：CpG C 位点及左右各 2 bp，仅横向拉宽 1.8 倍</label></div>
+                onChange={(e) => updateRegionEvidence(active.name, { focus: e.target.checked })} /> Focus：稀疏 CpG 横向拉宽 1.8 倍，密集 CpG 连续显示</label></div>
           </div>
           <p className="hint">比对后，峰图显示在上方对应的局部图下方。</p></section>}
         {preview && <section className="card"><div className="section-head"><div><div className="eyebrow">REPORT</div><h2>合并报告预览</h2></div></div>

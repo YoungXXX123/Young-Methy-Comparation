@@ -22,7 +22,9 @@ export function regionColumns(regions: Region[], full: Bounds, canvasWidth: numb
   for (let i = 1; i < positions.length; i += 1) {
     positions[i] = Math.max(positions[i], positions[i - 1] + tileWidth + gap);
   }
-  const overflow = Math.max(0, positions[positions.length - 1] + tileWidth - left - plotWidth);
-  for (let i = 0; i < positions.length; i += 1) positions[i] -= overflow;
+  positions[positions.length - 1] = Math.min(positions[positions.length - 1], left + plotWidth - tileWidth);
+  for (let i = positions.length - 2; i >= 0; i -= 1) {
+    positions[i] = Math.min(positions[i], positions[i + 1] - tileWidth - gap);
+  }
   return ordered.map((region, i) => ({ region, x: positions[i], width: tileWidth }));
 }

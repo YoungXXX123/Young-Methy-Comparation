@@ -1,6 +1,7 @@
 import type { Dataset } from "./data";
 import type { Comparison } from "./statistics";
-import { focusPosition, mergedRegionalTrace, regionBatches, type Read, type Region, type RegionalTrace, type RegionBatch, type TraceCurves } from "./ab1";
+import { focusSegmentPosition, focusSegments, mergedRegionalTrace, regionBatches,
+  type FocusSegment, type Read, type Region, type RegionalTrace, type RegionBatch, type TraceCurves } from "./ab1";
 import { colors, fullBounds, groupSeries, type Bounds } from "./chart";
 import { regionCanvasWidth, regionColumns } from "./region-layout";
 
@@ -100,7 +101,7 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
   }
 
   function drawRegionalTrace(curves: TraceCurves, region: Region, x0: number, x1: number,
-    y0: number, h: number, focus: boolean, cpgSites: number[]) {
+    y0: number, h: number, focus: boolean, segments: FocusSegment[]) {
     let maximum = 1;
     for (const base of nucleotides) for (const point of curves[base]) {
       if (Number.isFinite(point.x) && point.x >= region.start && point.x <= region.end && Number.isFinite(point.y)) {
@@ -114,15 +115,15 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
     ctx.moveTo(x0, baseline); ctx.lineTo(x1, baseline); ctx.stroke();
     ctx.save(); ctx.beginPath(); ctx.rect(x0, y0, x1 - x0, h); ctx.clip();
     ctx.globalAlpha = focus ? 1 : .28;
-    for (const base of nucleotides) for (const site of focus ? cpgSites : [undefined]) {
+    for (const base of nucleotides) for (const segment of focus ? segments : [undefined]) {
       ctx.strokeStyle = signalColors[base]; ctx.lineWidth = focus ? 1.3 : 1; ctx.beginPath();
       let started = false;
       for (const point of curves[base]) {
         if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < region.start || point.x > region.end ||
-          (site !== undefined && (point.x < site - 2.5 || point.x > site + 2.5))) {
+          (segment && (point.x < segment.start || point.x > segment.end))) {
           started = false; continue;
         }
-        const xx = site === undefined ? x(point.x) : focusPosition(point.x, site, region, width, x0, width - x1);
+        const xx = segment ? focusSegmentPosition(point.x, segment, region, width, x0, width - x1) : x(point.x);
         if (started) ctx.lineTo(xx, y(point.y)); else ctx.moveTo(xx, y(point.y));
         started = true;
       }
@@ -178,6 +179,7 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
 
     if (showTraces) (traceRows.get(region.name) ?? []).forEach(({ trace, focus }, rowIndex) => {
       const rowTop = zoomTop + zoomHeight + rowIndex * traceHeight;
+      const segments = focus ? focusSegments(trace.cpgSites, region) : [];
       ctx.fillStyle = "#2b4752"; ctx.font = "bold 13px sans-serif";
       ctx.fillText(`${region.name}区`, plotLeft + 5, rowTop + 20);
       if (!focus) {
@@ -186,11 +188,14 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
         ctx.textAlign = "left";
       } else {
         ctx.strokeStyle = "#aaccc2"; ctx.lineWidth = .8; ctx.setLineDash([2, 5]);
-        trace.cpgSites.forEach((site) => { ctx.beginPath(); ctx.moveTo(x(site), zoomTop + 42);
-          ctx.lineTo(x(site), rowTop + traceHeight - 16); ctx.stroke(); });
+        segments.forEach((segment) => segment.sites.forEach((site) => {
+          ctx.beginPath(); ctx.moveTo(x(site), zoomTop + 42);
+          ctx.lineTo(focusSegmentPosition(site, segment, region, width, plotLeft, width - plotRight), rowTop + traceHeight - 16);
+          ctx.stroke();
+        }));
         ctx.setLineDash([]);
       }
-      drawRegionalTrace(trace.curves, region, plotLeft, plotRight, rowTop, traceHeight, focus, trace.cpgSites);
+      drawRegionalTrace(trace.curves, region, plotLeft, plotRight, rowTop, traceHeight, focus, segments);
     });
   }
   ctx.fillStyle = "#60747c"; ctx.font = "16px sans-serif";

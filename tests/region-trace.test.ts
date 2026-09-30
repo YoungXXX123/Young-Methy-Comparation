@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cpgDistances, focusPosition, mergedSiteOwners, regionBatches, type Read } from "../src/ab1";
+import { cpgDistances, focusPosition, focusSegmentPosition, focusSegments, mergedSiteOwners, regionBatches, type Read } from "../src/ab1";
 import { mapToReference, type Base, type BaseProportion } from "../src/legacy-alignment";
 
 function sample(reference: string, name: string, batch: string, sequence: string, qualities: number[]): Read {
@@ -41,4 +41,24 @@ test("horizontal-only focus stretch keeps each CpG anchored to the zoom plot", (
   assert.equal(focusPosition(0, 0, region, 1000, 66, 24), 521);
   assert.equal(focusPosition(1, 0, region, 1000, 66, 24).toFixed(3), "537.380");
   assert.equal(focusPosition(-1, 0, region, 1000, 66, 24).toFixed(3), "504.620");
+});
+
+test("overlapping CpG windows become one continuous trace with 1.8x spacing and aligned guides", () => {
+  const region = { name: "R02", start: -30, end: 40 };
+  const segments = focusSegments([24, 6, 0], region);
+  assert.deepEqual(segments.map((segment) => segment.sites), [[0, 6], [24]]);
+  const first = segments[0], second = segments[1];
+  const x0 = focusSegmentPosition(0, first, region, 1000, 66, 24);
+  const x6 = focusSegmentPosition(6, first, region, 1000, 66, 24);
+  assert.ok(Math.abs((x6 - x0) / (6 * 910 / 70) - 1.8) < 1e-12);
+  assert.ok(focusSegmentPosition(first.end, first, region, 1000, 66, 24) <
+    focusSegmentPosition(second.start, second, region, 1000, 66, 24));
+});
+
+test("dense focus stays inside the region instead of cropping edge peaks", () => {
+  const region = { name: "R03", start: 0, end: 20 };
+  const segment = focusSegments([1, 5, 9, 13, 17], region)[0];
+  assert.deepEqual(segment.sites, [1, 5, 9, 13, 17]);
+  assert.ok(focusSegmentPosition(segment.start, segment, region, 1000, 66, 24) >= 66);
+  assert.ok(focusSegmentPosition(segment.end, segment, region, 1000, 66, 24) <= 976);
 });
