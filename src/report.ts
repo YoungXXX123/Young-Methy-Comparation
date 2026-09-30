@@ -1,10 +1,11 @@
 import type { Dataset } from "./data";
 import type { Comparison } from "./statistics";
-import { chooseRead, chromatogram, type Read, type Region } from "./ab1";
+import { FOCUS_SCALE, focusPosition, mergedRegionalTrace, regionBatches, type Read, type Region, type RegionalTrace, type RegionBatch, type TraceCurves } from "./ab1";
 import { colors, fullBounds, groupSeries, type Bounds } from "./chart";
 
 export type ReportPart = "combined" | "main" | "traces";
-export type RegionSource = { reads: Read[]; reference: string; center: number | null };
+export type RegionSource = { reads: Read[]; reference: string; center: number | null;
+  filterQ: boolean; minimumQ: number; focus: boolean };
 const nucleotides = ["A", "C", "G", "T"] as const;
 const signalColors = { A: "#258f64", C: "#397dd3", G: "#3e485b", T: "#d54d57" };
 
@@ -24,8 +25,19 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
   const full = fullBounds(datasets);
   const showMain = part !== "traces", showTraces = part !== "main";
   const mainHeight = 210, zoomHeight = 230, traceHeight = 150;
+  const traceRows: Array<{ region: Region; batch: RegionBatch; trace: RegionalTrace; focus: boolean; height: number }> = [];
+  if (showTraces) for (const region of regions) {
+    const source = regionSources[region.name] ?? { reads, reference, center, filterQ: false, minimumQ: 20, focus: false };
+    if (source.center === null || !source.reference) continue;
+    for (const batch of regionBatches(source.reads)) {
+      const trace = await mergedRegionalTrace(batch.reads, source.reference, source.center, region,
+        trim, qualityThreshold, windowSize, source.filterQ, source.minimumQ, source.focus);
+      const height = source.focus ? 190 : traceHeight;
+      traceRows.push({ region, batch, trace, focus: source.focus, height });
+    }
+  }
   const height = header + (showMain ? comparison.groups.length * mainHeight + regions.length * zoomHeight : 0) +
-    (showTraces ? regions.length * comparison.groups.length * traceHeight : 0) + footer;
+    traceRows.reduce((sum, row) => sum + row.height, 0) + footer;
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
   const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
@@ -83,6 +95,31 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
     ctx.textAlign = "left";
   }
 
+  function drawTrace(curves: TraceCurves, bounds: Bounds, x0: number, y0: number, w: number, h: number) {
+    let maximum = 1;
+    for (const base of nucleotides) for (const point of curves[base]) {
+      if (Number.isFinite(point.x) && point.x >= bounds[0] && point.x <= bounds[1] && Number.isFinite(point.y)) {
+        maximum = Math.max(maximum, point.y);
+      }
+    }
+    const x = (value: number) => x0 + (value - bounds[0]) / (bounds[1] - bounds[0]) * w;
+    const y = (value: number) => y0 + h - 12 - value / maximum * (h - 25);
+    ctx.strokeStyle = "#e5ebed"; ctx.lineWidth = 1; ctx.beginPath();
+    ctx.moveTo(x0, y0 + h - 11); ctx.lineTo(x0 + w, y0 + h - 11); ctx.stroke();
+    for (const base of nucleotides) {
+      ctx.strokeStyle = signalColors[base]; ctx.lineWidth = 1.3; ctx.beginPath();
+      let started = false;
+      for (const point of curves[base]) {
+        if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < bounds[0] || point.x > bounds[1]) {
+          started = false; continue;
+        }
+        if (started) ctx.lineTo(x(point.x), y(point.y)); else ctx.moveTo(x(point.x), y(point.y));
+        started = true;
+      }
+      ctx.stroke();
+    }
+  }
+
   if (showMain) {
     comparison.groups.forEach((group, i) => {
       const { x, yy } = axes(full, top, mainHeight, `${group} · n=${comparison.counts[group]}`);
@@ -108,42 +145,46 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
   }
 
   if (showTraces) {
-    for (const r of regions) {
-      const source = regionSources[r.name] ?? { reads, reference, center };
-      for (const group of comparison.groups) {
-        const chosen = source.center !== null ? chooseRead(source.reads, group, r, source.center) : null;
-        ctx.fillStyle = "#2b4752"; ctx.font = "17px sans-serif";
-        ctx.fillText(`${r.name} · ${r.start}–${r.end} bp · ${group}${chosen ? ` · ${chosen.read.file.name} · Q ${chosen.meanQ.toFixed(1)} · 覆盖 ${(chosen.coverage * 100).toFixed(0)}%` : ""}`, left, top + 20);
-        ctx.strokeStyle = "#e5ebed"; ctx.beginPath(); ctx.moveTo(left, top + traceHeight - 18);
-        ctx.lineTo(width - right, top + traceHeight - 18); ctx.stroke();
-        if (!chosen || !source.reference) {
-          ctx.fillStyle = "#98a5aa"; ctx.font = "16px sans-serif";
-          ctx.fillText("尚无覆盖此区域且通过质控的 AB1 原始峰图", left + 420, top + 80);
-        } else {
-          const curves = await chromatogram(chosen.read, source.reference, source.center!, r, trim, qualityThreshold, windowSize);
-          let maximum = 1;
-          for (const base of nucleotides) for (const point of curves[base]) {
-            if (Number.isFinite(point.y)) maximum = Math.max(maximum, point.y);
-          }
-          const x = (value: number) => left + (value - r.start) / (r.end - r.start) * (width - left - right);
-          const y = (value: number) => top + traceHeight - 20 - value / maximum * (traceHeight - 55);
+    for (const { region, batch, trace, focus, height: rowHeight } of traceRows) {
+      ctx.fillStyle = "#2b4752"; ctx.font = "17px sans-serif";
+      ctx.fillText(`${region.name} · ${batch.group} · ${batch.batch} · Q ${trace.meanQ === null ? "—" : trace.meanQ.toFixed(1)}`, left, top + 20);
+      if (!trace.coveredBases || (focus && !trace.cpgSites.length)) {
+        ctx.fillStyle = "#98a5aa"; ctx.font = "16px sans-serif";
+        ctx.fillText("此区域没有可展示的测序信号", left + 420, top + 80);
+      } else if (focus) {
+        let maximum = 1;
+        for (const base of nucleotides) for (const point of trace.curves[base]) {
+          if (Number.isFinite(point.y)) maximum = Math.max(maximum, point.y);
+        }
+        const baseline = top + rowHeight - 20;
+        ctx.strokeStyle = "#e5ebed"; ctx.beginPath(); ctx.moveTo(left, baseline); ctx.lineTo(width - right, baseline); ctx.stroke();
+        trace.cpgSites.forEach((site) => {
+          const anchor = left + (site - region.start) / (region.end - region.start) * (width - left - right);
+          ctx.strokeStyle = "#e1e8e6"; ctx.lineWidth = 1; ctx.beginPath();
+          ctx.moveTo(anchor, top + 28); ctx.lineTo(anchor, baseline); ctx.stroke();
           for (const base of nucleotides) {
-            ctx.strokeStyle = signalColors[base]; ctx.lineWidth = 1.2; ctx.beginPath();
+            ctx.strokeStyle = signalColors[base]; ctx.lineWidth = 1.3; ctx.beginPath();
             let started = false;
-            for (const point of curves[base]) {
-              if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) { started = false; continue; }
-              if (started) ctx.lineTo(x(point.x), y(point.y)); else ctx.moveTo(x(point.x), y(point.y));
+            for (const point of trace.curves[base]) {
+              if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < site - 2.5 || point.x > site + 2.5) {
+                started = false; continue;
+              }
+              const x = focusPosition(point.x, site, region, width, left, right);
+              const y = baseline - point.y / maximum * (traceHeight - 59) * FOCUS_SCALE;
+              if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
               started = true;
             }
             ctx.stroke();
           }
-        }
-        top += traceHeight;
+        });
+      } else {
+        drawTrace(trace.curves, [region.start, region.end], left, top + 27, width - left - right, traceHeight - 34);
       }
+      top += rowHeight;
     }
   }
   ctx.fillStyle = "#60747c"; ctx.font = "16px sans-serif";
-  ctx.fillText("红色小星号：有独立重复时表示所选组的总体检验；否则仅表示观察差异。AB1 为所选代表性读段。", left, height - 37);
+  ctx.fillText("红色小星号：有独立重复时表示所选组的总体检验；否则仅表示观察差异。AB1 峰图按位点拼接并择优。", left, height - 37);
   return canvas;
 }
 

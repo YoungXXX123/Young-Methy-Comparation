@@ -1,13 +1,101 @@
-import { localAlign, parseAbi, trimLowQuality, type AnalysisResult, type Base } from "./legacy-alignment";
+import { localAlign, mergeAnalysisResults, parseAbi, trimLowQuality, type AnalysisResult, type Base } from "./legacy-alignment";
 
 export type Read = { file: File; group: string; batch: string; result: AnalysisResult };
 export type Region = { name: string; start: number; end: number };
 export type TracePoint = { x: number; y: number };
 export type TraceCurves = Record<Base, TracePoint[]>;
 export type ChosenRead = { read: Read; score: number; coverage: number; meanQ: number; curves?: TraceCurves };
+export type RegionBatch = { group: string; batch: string; reads: Read[] };
+export type RegionalTrace = { curves: TraceCurves; cpgSites: number[]; meanQ: number | null; coveredBases: number };
+export const FOCUS_SCALE = 1.35;
 
 const bases: Base[] = ["A", "C", "G", "T"];
 const complement: Record<Base, Base> = { A: "T", T: "A", C: "G", G: "C" };
+const blankCurves = (): TraceCurves => Object.fromEntries(bases.map((base) => [base, [] as TracePoint[]])) as TraceCurves;
+
+export function regionBatches(reads: Read[]): RegionBatch[] {
+  const batches = new Map<string, RegionBatch>();
+  for (const read of reads) {
+    const key = `${read.group}\u0000${read.batch}`;
+    const existing = batches.get(key);
+    if (existing) existing.reads.push(read);
+    else batches.set(key, { group: read.group, batch: read.batch, reads: [read] });
+  }
+  return [...batches.values()];
+}
+
+export function mergedSiteOwners(reads: Read[]): { result: AnalysisResult; owners: Map<number, Read> } {
+  if (!reads.length) throw new Error("没有可拼接的 AB1 读段");
+  const result = reads.length === 1 ? reads[0].result : mergeAnalysisResults(reads[0].batch, reads.map((read) => read.result));
+  const owners = new Map<number, Read>();
+  const selectedQuality = new Map<number, number>();
+  for (const read of reads) {
+    for (const index of read.result.mappedIndices) {
+      if (!Number.isFinite(read.result.matrix.A[index])) continue;
+      const incomingQuality = read.result.mappedQuality.get(index);
+      const priorQuality = selectedQuality.get(index);
+      const replace = !owners.has(index) || (Number.isFinite(incomingQuality) &&
+        (!Number.isFinite(priorQuality) || Number(incomingQuality) > Number(priorQuality)));
+      if (!replace) continue;
+      owners.set(index, read);
+      if (Number.isFinite(incomingQuality)) selectedQuality.set(index, Number(incomingQuality));
+      else selectedQuality.delete(index);
+    }
+  }
+  return { result, owners };
+}
+
+export function cpgDistances(reference: string, region: Region, center: number): Array<{ index: number; distance: number }> {
+  const out: Array<{ index: number; distance: number }> = [];
+  for (let index = 0; index < reference.length - 1; index += 1) {
+    const distance = index - center;
+    if (reference[index] === "C" && reference[index + 1] === "G" && distance >= region.start && distance <= region.end) {
+      out.push({ index, distance });
+    }
+  }
+  return out;
+}
+
+export function focusPosition(value: number, site: number, region: Region, width: number, left: number, right: number) {
+  const base = (distance: number) => left + (distance - region.start) / (region.end - region.start) * (width - left - right);
+  return base(site) + FOCUS_SCALE * (base(value) - base(site));
+}
+
+export async function mergedRegionalTrace(reads: Read[], reference: string, center: number, region: Region,
+  trim: boolean, trimQ: number, windowSize: number, filterQ: boolean, minimumQ: number, focus: boolean): Promise<RegionalTrace> {
+  const curves = blankCurves();
+  if (!reads.length) return { curves, cpgSites: [], meanQ: null, coveredBases: 0 };
+  const { result, owners } = mergedSiteOwners(reads);
+  const cpg = cpgDistances(reference, region, center);
+  const focusIndices = new Set(focus ? cpg.flatMap(({ index }) => [index - 2, index - 1, index, index + 1, index + 2]) : []);
+  const selected = new Map<Read, Set<number>>();
+  const qualities: number[] = [];
+  const allowed = new Set<number>();
+  for (const index of result.mappedIndices) {
+    const distance = index - center;
+    if (distance < region.start || distance > region.end || (focus && !focusIndices.has(index))) continue;
+    const owner = owners.get(index);
+    if (!owner) continue;
+    const q = result.mappedQuality.get(index);
+    if (filterQ && (!Number.isFinite(q) || Number(q) < minimumQ)) continue;
+    if (Number.isFinite(q)) qualities.push(Number(q));
+    allowed.add(index);
+    if (!selected.has(owner)) selected.set(owner, new Set());
+    selected.get(owner)!.add(index);
+  }
+  for (const read of reads) {
+    const indices = selected.get(read);
+    if (!indices?.size) continue;
+    const piece = await chromatogram(read, reference, center, region, trim, trimQ, windowSize, indices);
+    for (const base of bases) {
+      if (curves[base].length) curves[base].push({ x: Number.NaN, y: Number.NaN });
+      curves[base].push(...piece[base]);
+    }
+  }
+  return { curves, cpgSites: cpg.filter(({ index }) => allowed.has(index)).map(({ distance }) => distance),
+    meanQ: qualities.length ? qualities.reduce((sum, q) => sum + q, 0) / qualities.length : null,
+    coveredBases: allowed.size };
+}
 
 function ascii(view: DataView, start: number, length: number): string {
   let result = "";
@@ -91,7 +179,7 @@ export function chooseRead(reads: Read[], group: string, region: Region, center:
 }
 
 export async function chromatogram(read: Read, reference: string, center: number, region: Region,
-  trim: boolean, qualityThreshold: number, windowSize: number): Promise<TraceCurves> {
+  trim: boolean, qualityThreshold: number, windowSize: number, selectedIndices?: ReadonlySet<number>): Promise<TraceCurves> {
   const buffer = await read.file.arrayBuffer();
   const record = parseAbi(buffer);
   const trimmed = trim ? trimLowQuality(record, qualityThreshold, windowSize) : record;
@@ -101,11 +189,12 @@ export async function chromatogram(read: Read, reference: string, center: number
     ({ A: "T", T: "A", C: "G", G: "C", N: "N" })[base as Base | "N"] ?? "N").join("") : trimmed.sequence;
   const pairs = localAlign(reference, query).pairs;
   const { peaks, channels } = rawTrace(buffer);
-  const curves = Object.fromEntries(bases.map((base) => [base, [] as TracePoint[]])) as TraceCurves;
+  const curves = blankCurves();
   let lastReference = -10, lastQuery = -10;
   for (const [refIndex, queryIndex] of pairs) {
     const distance = refIndex - center;
     if (distance < region.start - 1 || distance > region.end + 1) continue;
+    if (selectedIndices && !selectedIndices.has(refIndex)) continue;
     const rawIndex = reverse ? start + trimmed.sequence.length - 1 - queryIndex : start + queryIndex;
     const peak = peaks[rawIndex];
     if (!Number.isFinite(peak)) continue;

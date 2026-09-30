@@ -3,14 +3,16 @@ import { analyzeFile, sanitizeSequence } from "./legacy-alignment";
 import { mergeAb1Batches } from "./ab1-workflow";
 import { datasetCsv, readSpreadsheet, type Dataset } from "./data";
 import { analyzeDatasets, type Comparison, type Marking, type Method } from "./statistics";
-import { chooseRead, chromatogram, type Read, type Region, type TraceCurves } from "./ab1";
+import { FOCUS_SCALE, focusPosition, mergedRegionalTrace, regionBatches, type Read, type Region, type RegionalTrace, type TraceCurves, type RegionBatch } from "./ab1";
 import { clampBounds, fullBounds, SharedChart, type Bounds } from "./chart";
 import { downloadReport, reportCanvas, type RegionSource, type ReportPart } from "./report";
 
 type Ab1Entry = { id: string; file: File; group: string; batch: string; includeTable: boolean };
-type RegionAb1Entry = { id: string; file: File; group: string };
-type RegionEvidence = { entries: RegionAb1Entry[]; reads: Read[] };
-const emptyRegionEvidence = (): RegionEvidence => ({ entries: [], reads: [] });
+type RegionAb1Entry = { id: string; file: File; group: string; batch: string };
+type RegionEvidence = { entries: RegionAb1Entry[]; reads: Read[]; uploadGroup: string; uploadBatch: string;
+  filterQ: boolean; minimumQ: number; focus: boolean };
+const emptyRegionEvidence = (): RegionEvidence => ({ entries: [], reads: [], uploadGroup: "", uploadBatch: "",
+  filterQ: false, minimumQ: 20, focus: false });
 const baseColors = { A: "#258f64", C: "#397dd3", G: "#3e485b", T: "#d54d57" };
 
 function saveText(text: string, filename: string) {
@@ -25,41 +27,62 @@ function referenceSequence(input: string) {
   return sanitizeSequence(body);
 }
 
-function TracePanel({ read, region, reference, center, trim, threshold, windowSize }: {
-  read: Read; region: Region; reference: string; center: number;
-  trim: boolean; threshold: number; windowSize: number;
+function TraceSvg({ curves, bounds, label, focusSites = [] }: { curves: TraceCurves; bounds: [number, number]; label: string; focusSites?: number[] }) {
+  const width = 1000, left = 66, right = 24;
+  const focus = focusSites.length > 0, height = focus ? 230 : 190, baseline = focus ? 205 : 165;
+  let max = 1;
+  for (const base of ["A", "C", "G", "T"] as const) for (const point of curves[base]) {
+    if (Number.isFinite(point.x) && point.x >= bounds[0] && point.x <= bounds[1] && Number.isFinite(point.y)) max = Math.max(max, point.y);
+  }
+  const x = (value: number) => left + (value - bounds[0]) / (bounds[1] - bounds[0]) * (width - left - right);
+  const scaleRegion = { name: "focus", start: bounds[0], end: bounds[1] };
+  const y = (value: number) => baseline - value / max * 135 * (focus ? FOCUS_SCALE : 1);
+  const pathFor = (base: "A" | "C" | "G" | "T", site?: number) => {
+    const within: [number, number] = site === undefined ? bounds : [site - 2.5, site + 2.5];
+    let started = false, path = "";
+    for (const point of curves[base]) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < within[0] || point.x > within[1]) { started = false; continue; }
+      const px = site === undefined ? x(point.x) : focusPosition(point.x, site, scaleRegion, width, left, right);
+      path += `${started ? "L" : "M"}${px.toFixed(1)},${y(point.y).toFixed(1)}`;
+      started = true;
+    }
+    return path;
+  };
+  return <svg className="trace-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label}>
+    <line x1={left} x2={width - right} y1={baseline + 1} y2={baseline + 1} stroke="#dbe4e8" />
+    {focus ? focusSites.map((site) => <g key={site}>
+      <line x1={x(site)} x2={x(site)} y1="15" y2={baseline} stroke="#e1e8e6" strokeDasharray="3 4">
+        <title>CpG {site.toFixed(1)} bp</title></line>
+      {(["A", "C", "G", "T"] as const).map((base) => <path key={base} d={pathFor(base, site)}
+        fill="none" stroke={baseColors[base]} strokeWidth="1.3" />)}
+    </g>) : (["A", "C", "G", "T"] as const).map((base) => <path key={base} d={pathFor(base)}
+      fill="none" stroke={baseColors[base]} strokeWidth="1.3" />)}
+    <text x={left} y={height - 7} className="chart-tick">{bounds[0].toFixed(1)} bp</text>
+    <text x={width - right} y={height - 7} textAnchor="end" className="chart-tick">{bounds[1].toFixed(1)} bp</text>
+  </svg>;
+}
+
+function TracePanel({ batch, region, reference, center, trim, threshold, windowSize, filterQ, minimumQ, focus }: {
+  batch: RegionBatch; region: Region; reference: string; center: number;
+  trim: boolean; threshold: number; windowSize: number; filterQ: boolean; minimumQ: number; focus: boolean;
 }) {
-  const [curves, setCurves] = useState<TraceCurves | null>(null);
+  const [trace, setTrace] = useState<RegionalTrace | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     let current = true;
-    setCurves(null); setError("");
-    chromatogram(read, reference, center, region, trim, threshold, windowSize).then((value) => {
-      if (current) setCurves(value);
+    setTrace(null); setError("");
+    mergedRegionalTrace(batch.reads, reference, center, region, trim, threshold, windowSize, filterQ, minimumQ, focus).then((value) => {
+      if (current) setTrace(value);
     }).catch((e) => { if (current) setError(String(e)); });
     return () => { current = false; };
-  }, [read, region, reference, center, trim, threshold, windowSize]);
-  if (error) return <p className="warning">峰图读取失败：{error}</p>;
-  if (!curves) return <p className="muted">正在提取原始荧光峰…</p>;
-  const width = 1000, left = 35, right = 20;
-  let max = 1;
-  for (const base of ["A", "C", "G", "T"] as const) for (const p of curves[base]) if (Number.isFinite(p.y)) max = Math.max(max, p.y);
-  const x = (value: number) => left + (value - region.start) / (region.end - region.start) * (width - left - right);
-  const y = (value: number) => 165 - value / max * 135;
-  return <svg className="trace-chart" viewBox={`0 0 ${width} 190`} role="img" aria-label={`${read.file.name} 原始 AB1 荧光峰`}>
-    <line x1={left} x2={width - right} y1="166" y2="166" stroke="#dbe4e8" />
-    {(["A", "C", "G", "T"] as const).map((base) => {
-      let started = false, path = "";
-      for (const point of curves[base]) {
-        if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) { started = false; continue; }
-        path += `${started ? "L" : "M"}${x(point.x).toFixed(1)},${y(point.y).toFixed(1)}`;
-        started = true;
-      }
-      return <path key={base} d={path} fill="none" stroke={baseColors[base]} strokeWidth="1.3" />;
-    })}
-    <text x={left} y="183" className="chart-tick">{region.start} bp</text>
-    <text x={width - right} y="183" textAnchor="end" className="chart-tick">{region.end} bp</text>
-  </svg>;
+  }, [batch, region, reference, center, trim, threshold, windowSize, filterQ, minimumQ, focus]);
+  const title = `${region.name} · ${batch.group} · ${batch.batch} · Q ${trace?.meanQ === null || !trace ? "—" : trace.meanQ.toFixed(1)}`;
+  return <div className="trace-block"><h3>{title}</h3>
+    {error ? <p className="warning">峰图读取失败：{error}</p> : !trace ? <p className="muted">正在拼接 AB1 峰图…</p> : !trace.coveredBases || (focus && !trace.cpgSites.length) ?
+      <p className="empty-trace">此区域没有可展示的测序信号。</p> :
+        <div className="chart-scroller"><TraceSvg curves={trace.curves} bounds={[region.start, region.end]}
+          focusSites={focus ? trace.cpgSites : []} label={`${title} 拼接 AB1 峰图`} /></div>}
+  </div>;
 }
 
 export default function App() {
@@ -107,9 +130,12 @@ export default function App() {
     ? regionReference.indexOf(regionTarget) + (regionTarget.length - 1) / 2 : null;
   const regionSources = useMemo<Record<string, RegionSource>>(() => Object.fromEntries(regions.flatMap((region) => {
     const evidence = regionEvidence[region.name];
-    if (!evidence?.entries.length) return [];
-    return [[region.name, { reads: evidence.reads, reference: regionReference, center: regionCenter }]];
-  })), [regions, regionEvidence, regionReference, regionCenter]);
+    if (!evidence) return [];
+    return [[region.name, { reads: evidence.entries.length ? evidence.reads : reads,
+      reference: evidence.entries.length ? regionReference : reference,
+      center: evidence.entries.length ? regionCenter : center,
+      filterQ: evidence.filterQ, minimumQ: evidence.minimumQ, focus: evidence.focus }]];
+  })), [regions, regionEvidence, regionReference, regionCenter, reads, reference, center]);
   const comparison = useMemo<Comparison | null>(() => {
     if (groups.length < 2 || useCompared.length < 2) return null;
     try { return analyzeDatasets(datasets, useCompared, threshold, method, marking); }
@@ -162,11 +188,13 @@ export default function App() {
     const incoming = Array.from(files).filter((file) => /\.(ab1|abi)$/i.test(file.name));
     setRegionEvidence((current) => {
       const evidence = current[name] ?? emptyRegionEvidence();
+      const group = evidence.uploadGroup || comparison?.groups[0] || groups[0] || "Sample_1";
+      const batch = evidence.uploadBatch || datasets.find((dataset) => dataset.group === group)?.batch || "Batch_1";
       const known = new Set(evidence.entries.map((entry) => entry.id));
       return { ...current, [name]: { ...evidence, reads: [], entries: [...evidence.entries,
         ...incoming.flatMap((file) => {
           const id = `${file.name}:${file.size}:${file.lastModified}`;
-          return known.has(id) ? [] : [{ id, file, group: groups[0] ?? "Sample_1" }];
+          return known.has(id) ? [] : [{ id, file, group, batch }];
         })] } };
     });
     setNotice(`${name} 已选择 ${incoming.length} 个 AB1，请按条件组检查后比对。`);
@@ -180,21 +208,21 @@ export default function App() {
       regionReference.indexOf(regionTarget) !== regionReference.lastIndexOf(regionTarget)) {
       setError("此区域的靶序列必须在参考序列中恰好出现一次，以确定 distance=0。"); return;
     }
-    if (evidence.entries.some((entry) => !groups.includes(entry.group))) {
-      setError("请为此区域的每个 AB1 选择已有的条件组。"); return;
+    if (evidence.entries.some((entry) => !groups.includes(entry.group) || !entry.batch.trim())) {
+      setError("请为此区域的每个 AB1 选择已有的条件组并填写批次编号。"); return;
     }
     setBusy(true); setError("");
     const mapped: Read[] = [], failures: string[] = [];
     for (const entry of evidence.entries) {
       try {
         const result = await analyzeFile(entry.file, regionReference, trim, qualityThreshold, windowSize);
-        mapped.push({ file: entry.file, group: entry.group, batch: name, result });
+        mapped.push({ file: entry.file, group: entry.group, batch: entry.batch.trim(), result });
       } catch (e) { failures.push(`${entry.file.name}：${e instanceof Error ? e.message : String(e)}`); }
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
     updateRegionEvidence(name, { reads: mapped });
     setBusy(false);
-    setNotice(`${name} 完成 ${mapped.length} 个 AB1 比对；区域峰图已更新。`);
+    setNotice(`${name} 完成 ${mapped.length} 个 AB1 比对，按样本和批次拼接为 ${regionBatches(mapped).length} 条区域峰图。`);
     if (failures.length) setError(failures.join("；"));
   };
 
@@ -249,7 +277,10 @@ export default function App() {
 
   const active = regions.find((r) => r.name === selectedRegion) ?? regions[0];
   const activeEvidence = active ? regionEvidence[active.name] ?? emptyRegionEvidence() : null;
-  const activeSource = active ? regionSources[active.name] ?? { reads, reference, center } : null;
+  const activeSource = active ? regionSources[active.name] ?? { reads, reference, center, filterQ: false, minimumQ: 20, focus: false } : null;
+  const activeBatches = useMemo(() => regionBatches(activeSource?.reads ?? []), [activeSource?.reads]);
+  const regionUploadGroup = activeEvidence?.uploadGroup || comparison?.groups[0] || "";
+  const regionUploadBatch = activeEvidence?.uploadBatch || datasets.find((dataset) => dataset.group === regionUploadGroup)?.batch || "Batch_1";
   return <div className="app-shell">
     <header className="hero"><div className="hero-inner"><h1>甲基化差异图谱分析工具</h1></div></header>
     <main className="layout">
@@ -334,29 +365,41 @@ export default function App() {
               onChange={(e) => { setRegionReferenceInput(e.target.value); resetRegionReads(); }} placeholder=">reference\nACGT…" /></label>
             <label>区域共用靶序列（对应表格的 distance=0）<input value={regionTargetInput}
               onChange={(e) => { setRegionTargetInput(e.target.value); resetRegionReads(); }} placeholder="ACGT…" /></label>
+            <div className="input-pair"><label>本次上传所属样本<select value={regionUploadGroup}
+              onChange={(e) => updateRegionEvidence(active.name, { uploadGroup: e.target.value, uploadBatch: "" })}>
+              {comparison.groups.map((group) => <option key={group} value={group}>{group}</option>)}</select></label>
+              <label>本次上传批次编号<input value={regionUploadBatch}
+                onChange={(e) => updateRegionEvidence(active.name, { uploadBatch: e.target.value })} /></label></div>
             <label className="upload-box">＋ 上传 {active.name} 的 AB1（可多选）<input type="file" accept=".ab1,.abi" multiple
               onChange={(e) => { addRegionAb1(active.name, e.target.files); e.target.value = ""; }} /></label>
-            {activeEvidence.entries.length > 0 && <div className="table-wrap"><table><thead><tr><th>AB1 文件</th><th>条件组</th><th></th></tr></thead><tbody>
+            {activeEvidence.entries.length > 0 && <div className="table-wrap"><table><thead><tr><th>AB1 文件</th><th>样本</th><th>批次编号</th><th></th></tr></thead><tbody>
               {activeEvidence.entries.map((entry) => <tr key={entry.id}><td>{entry.file.name}</td><td><select value={entry.group}
                 onChange={(e) => updateRegionEvidence(active.name, { entries: activeEvidence.entries.map((item) =>
                   item.id === entry.id ? { ...item, group: e.target.value } : item), reads: [] })}>
                 {comparison.groups.map((group) => <option key={group} value={group}>{group}</option>)}</select></td>
+                <td><input value={entry.batch} onChange={(e) => updateRegionEvidence(active.name, { entries: activeEvidence.entries.map((item) =>
+                  item.id === entry.id ? { ...item, batch: e.target.value } : item), reads: [] })} /></td>
                 <td><button className="small" onClick={() => updateRegionEvidence(active.name, {
                   entries: activeEvidence.entries.filter((item) => item.id !== entry.id), reads: [] })}>移除</button></td></tr>)}</tbody></table></div>}
             <button className="primary" disabled={busy || !activeEvidence.entries.length}
               onClick={() => void processRegionAb1(active.name)}>{busy ? "正在处理…" : `比对并显示 ${active.name} 峰图`}</button>
+            <div className="region-options"><label className="check"><input type="checkbox" checked={activeEvidence.filterQ}
+              onChange={(e) => updateRegionEvidence(active.name, { filterQ: e.target.checked })} /> 按质控分数筛选峰图</label>
+              {activeEvidence.filterQ && <label>最低 Phred Q<input type="number" min="0" max="60" value={activeEvidence.minimumQ}
+                onChange={(e) => updateRegionEvidence(active.name, { minimumQ: Math.max(0, Math.min(60, Number(e.target.value) || 0)) })} /></label>}
+              <label className="check"><input type="checkbox" checked={activeEvidence.focus}
+                onChange={(e) => updateRegionEvidence(active.name, { focus: e.target.checked })} /> Focus：CpG C 位点及左右各 2 bp，原位放大 1.35 倍</label></div>
           </div>
-          {comparison.groups.map((group) => {
-            const chosen = activeSource.center !== null ? chooseRead(activeSource.reads, group, active, activeSource.center) : null;
-            return <div className="trace-block" key={`${active.name}:${group}`}><h3>{group}{chosen && <small> · {chosen.read.file.name} · Q {chosen.meanQ.toFixed(1)} · 覆盖 {(chosen.coverage * 100).toFixed(0)}%</small>}</h3>
-              {chosen && activeSource.center !== null ? <TracePanel read={chosen.read} region={active} reference={activeSource.reference} center={activeSource.center}
-                trim={trim} threshold={qualityThreshold} windowSize={windowSize} /> : <p className="empty-trace">尚无覆盖此区域且通过质控的 AB1。</p>}</div>;
-          })}
+          {activeSource.center !== null && activeBatches.length ? activeBatches.map((batch) =>
+            <TracePanel key={`${active.name}:${batch.group}:${batch.batch}`} batch={batch} region={active}
+              reference={activeSource.reference} center={activeSource.center!} trim={trim} threshold={qualityThreshold}
+              windowSize={windowSize} filterQ={activeSource.filterQ} minimumQ={activeSource.minimumQ} focus={activeSource.focus} />) :
+            <p className="empty-trace">尚未生成此区域的 AB1 峰图。</p>}
           <div className="legend"><span style={{ color: baseColors.A }}>● A</span><span style={{ color: baseColors.C }}>● C</span>
             <span style={{ color: baseColors.G }}>● G</span><span style={{ color: baseColors.T }}>● T</span></div></section>}
         {preview && <section className="card"><div className="section-head"><div><div className="eyebrow">REPORT</div><h2>合并报告预览</h2></div></div>
           <img className="report-preview" src={preview} alt="甲基化与 AB1 合并报告" />
-          <p className="hint">没有通过质控的 AB1 会明确留空，不生成替代测序曲线。</p></section>}
+          <p className="hint">无测序信号的位置留白；区域峰图按当前质控与 Focus 选择生成。</p></section>}
       </div>
     </main>
   </div>;
