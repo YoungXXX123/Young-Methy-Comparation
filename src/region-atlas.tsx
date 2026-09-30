@@ -1,21 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Dataset } from "./data";
 import type { Comparison } from "./statistics";
-import { focusSegmentPosition, focusSegments, mergedRegionalTrace, regionBatches,
-  type FocusSegment, type Region, type RegionalTrace, type RegionBatch, type TraceCurves } from "./ab1";
+import { mergedRegionalLogo, regionBatches, type Region, type RegionalLogo, type RegionBatch } from "./ab1";
 import { colors, fullBounds, groupSeries } from "./chart";
 import { regionCanvasWidth, regionColumns } from "./region-layout";
 import type { RegionSource } from "./report";
+import { logoColors, logoLetters, logoPlacements } from "./sequence-logo";
 
-const nucleotides = ["A", "C", "G", "T"] as const;
-const signalColors = { A: "#258f64", C: "#397dd3", G: "#3e485b", T: "#d54d57" };
-type TraceRow = { batch: RegionBatch; trace: RegionalTrace };
+type LogoRow = { batch: RegionBatch; logo: RegionalLogo };
 
-export function RegionAtlas({ datasets, comparison, regions, sources, trim, qualityThreshold, windowSize }: {
+export function RegionAtlas({ datasets, comparison, regions, sources }: {
   datasets: Dataset[]; comparison: Comparison; regions: Region[]; sources: Record<string, RegionSource>;
-  trim: boolean; qualityThreshold: number; windowSize: number;
 }) {
-  const [rows, setRows] = useState<Record<string, TraceRow[]>>({});
+  const [rows, setRows] = useState<Record<string, LogoRow[]>>({});
   const full = useMemo(() => fullBounds(datasets), [datasets]);
   const width = regionCanvasWidth(regions.length), left = 66, right = 24;
   const columns = regionColumns(regions, full, width, left, right);
@@ -25,37 +22,22 @@ export function RegionAtlas({ datasets, comparison, regions, sources, trim, qual
       const source = sources[region.name];
       if (!source?.reference || source.center === null) return [region.name, []] as const;
       const batches = regionBatches(source.reads);
-      const traces = await Promise.all(batches.map(async (batch) => ({ batch,
-        trace: await mergedRegionalTrace(batch.reads, source.reference, source.center!, region,
-          trim, qualityThreshold, windowSize, source.filterQ, source.minimumQ, source.focus) })));
-      return [region.name, traces] as const;
+      const logos = batches.map((batch) => ({ batch,
+        logo: mergedRegionalLogo(batch.reads, source.reference, source.center!, region,
+          source.filterQ, source.minimumQ) }));
+      return [region.name, logos] as const;
     })).then((entries) => { if (current) setRows(Object.fromEntries(entries)); })
       .catch(() => { if (current) setRows({}); });
     return () => { current = false; };
-  }, [regions, sources, trim, qualityThreshold, windowSize]);
+  }, [regions, sources]);
 
   const maxRows = Math.max(0, ...regions.map((region) => rows[region.name]?.length ?? 0));
-  const zoomTop = 98, zoomHeight = 195, traceTop = zoomTop + zoomHeight + 12, traceHeight = 116;
-  const height = traceTop + maxRows * traceHeight + 30;
+  const zoomTop = 98, zoomHeight = 195, logoTop = zoomTop + zoomHeight + 12, logoHeight = 110;
+  const height = logoTop + maxRows * logoHeight + 30;
   const overviewX = (value: number) => left + (value - full[0]) / (full[1] - full[0]) * (width - left - right);
 
-  function tracePath(curves: TraceCurves, base: typeof nucleotides[number], region: Region,
-    plotLeft: number, plotRight: number, baseline: number, max: number, segment?: FocusSegment) {
-    let started = false, path = "";
-    for (const point of curves[base]) {
-      if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < region.start || point.x > region.end ||
-        (segment && (point.x < segment.start || point.x > segment.end))) { started = false; continue; }
-      const rawX = plotLeft + (point.x - region.start) / (region.end - region.start) * (plotRight - plotLeft);
-      const x = segment ? focusSegmentPosition(point.x, segment, region, width, plotLeft, width - plotRight) : rawX;
-      const y = baseline - point.y / max * 76;
-      path += `${started ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
-      started = true;
-    }
-    return path;
-  }
-
   return <div className="chart-scroller"><svg className="atlas-chart" viewBox={`0 0 ${width} ${height}`}
-    role="img" aria-label="所选区域与甲基化全景的位置关系、并排局部图和对齐的 AB1 峰图">
+    role="img" aria-label="所选区域与甲基化全景的位置关系、并排局部图和对齐的 AB1 序列 logo">
     <text x={left} y="17" className="chart-tick">已选区域在全长图谱中的位置</text>
     <line x1={left} x2={width - right} y1="40" y2="40" stroke="#9eb8b3" strokeWidth="2" />
     {columns.map(({ region, x, width: tileWidth }) => {
@@ -64,8 +46,8 @@ export function RegionAtlas({ datasets, comparison, regions, sources, trim, qual
       const scale = (value: number) => plotLeft + (value - region.start) / (region.end - region.start) * (plotRight - plotLeft);
       const source = sources[region.name];
       return <g key={region.name}>
-        <defs><clipPath id={`trace-clip-${region.name}`}><rect x={plotLeft} y={traceTop}
-          width={plotRight - plotLeft} height={Math.max(0, height - traceTop)} /></clipPath></defs>
+        <defs><clipPath id={`logo-clip-${region.name}`}><rect x={plotLeft} y={logoTop}
+          width={plotRight - plotLeft} height={Math.max(0, height - logoTop)} /></clipPath></defs>
         <rect x={p0} y="33" width={Math.max(2, p1 - p0)} height="14" rx="3" fill="#f1d6a4" />
         <line x1={p0} x2={p0} y1="28" y2="52" stroke="#bd9561" />
         <line x1={p1} x2={p1} y1="28" y2="52" stroke="#bd9561" />
@@ -94,28 +76,35 @@ export function RegionAtlas({ datasets, comparison, regions, sources, trim, qual
             fill="#c43d3d" fontSize="10">★</text>)}
         <text x={plotLeft} y={zoomTop + 179} fontSize="11" fill="#70898b">{Math.round(region.start)} bp</text>
         <text x={plotRight} y={zoomTop + 179} textAnchor="end" fontSize="11" fill="#70898b">{Math.round(region.end)} bp</text>
-        {(rows[region.name] ?? []).map(({ batch, trace }, rowIndex) => {
+        {(rows[region.name] ?? []).map(({ batch, logo }, rowIndex) => {
           const focus = source?.focus ?? true;
-          const segments = focus ? focusSegments(trace.cpgSites, region) : [];
-          const rowTop = traceTop + rowIndex * traceHeight, baseline = rowTop + 99;
-          let max = 1;
-          for (const base of nucleotides) for (const point of trace.curves[base]) {
-            if (Number.isFinite(point.y)) max = Math.max(max, point.y);
-          }
+          const showCpn = source?.showCpn ?? false;
+          const placements = logoPlacements(logo.columns, region, focus, showCpn, plotLeft, plotRight);
+          const rowTop = logoTop + rowIndex * logoHeight, baseline = rowTop + 96;
           return <g key={`${batch.group}:${batch.batch}`} aria-label={`${region.name} ${batch.group} ${batch.batch}`}>
             <line x1={plotLeft} x2={plotRight} y1={baseline} y2={baseline} stroke="#e3ebe8" />
             <text x={plotLeft + 5} y={rowTop + 15} fontSize="11" fontWeight="700" fill="#294f50">{region.name}区</text>
             {!focus && <text x={plotRight} y={rowTop + 15} textAnchor="end" fontSize="11" fill="#76908e">
-              Q {trace.meanQ === null ? "—" : trace.meanQ.toFixed(1)}</text>}
-            {segments.flatMap((segment) => segment.sites.map((site) => <line key={site} x1={scale(site)}
-              x2={focusSegmentPosition(site, segment, region, width, plotLeft, width - plotRight)}
-              y1={zoomTop + 38} y2={baseline} stroke="#a3c7be" strokeWidth=".7" strokeDasharray="2 4" />))}
-            <g clipPath={`url(#trace-clip-${region.name})`}>
-              {nucleotides.map((base) => focus ? segments.map((segment) =>
-                <path key={`${base}:${segment.start}`} d={tracePath(trace.curves, base, region, plotLeft, plotRight, baseline, max, segment)}
-                  stroke={signalColors[base]} strokeWidth="1.2" fill="none" />) :
-                <path key={base} d={tracePath(trace.curves, base, region, plotLeft, plotRight, baseline, max)}
-                  stroke={signalColors[base]} strokeOpacity=".28" strokeWidth="1" fill="none" />)}
+              Q {logo.meanQ === null ? "—" : logo.meanQ.toFixed(1)}</text>}
+            {placements.filter(({ emphasized }) => emphasized).map(({ column, anchor, x }) =>
+              <line key={`guide:${column.index}`} x1={anchor} x2={x} y1={zoomTop + 38} y2={baseline}
+                stroke={column.kind === "cpn" ? "#d6a66b" : "#a3c7be"} strokeWidth=".7" strokeDasharray="2 4" />)}
+            <g clipPath={`url(#logo-clip-${region.name})`}>
+              {placements.map(({ column, x, width: letterWidth, emphasized }) => {
+                let bottom = baseline;
+                return <g key={column.index} opacity={emphasized ? 1 : .22}>
+                  {logoLetters(column).map(({ base, fraction }) => {
+                    const glyphHeight = fraction * 66;
+                    const y = bottom;
+                    bottom -= glyphHeight;
+                    return glyphHeight < 1 ? null : <text key={base} x="0" y="0" textAnchor="middle"
+                      fontFamily="Arial, sans-serif" fontWeight="900" fontSize="100" fill={logoColors[base]}
+                      transform={`translate(${x} ${y}) scale(${letterWidth / 72} ${glyphHeight / 73})`}>{base}</text>;
+                  })}
+                  {column.kind === "cpn" && emphasized && <text x={x} y={baseline + 9} textAnchor="middle"
+                    fontSize="8" fontWeight="700" fill="#bd8243">N</text>}
+                </g>;
+              })}
             </g>
           </g>;
         })}

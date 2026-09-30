@@ -11,9 +11,9 @@ import { downloadReport, reportCanvas, type RegionSource, type ReportPart } from
 type Ab1Entry = { id: string; file: File; group: string; batch: string; includeTable: boolean };
 type RegionAb1Entry = { id: string; file: File; group: string; batch: string };
 type RegionEvidence = { entries: RegionAb1Entry[]; reads: Read[]; uploadGroup: string; uploadBatch: string;
-  filterQ: boolean; minimumQ: number; focus: boolean };
+  filterQ: boolean; minimumQ: number; focus: boolean; showCpn: boolean };
 const emptyRegionEvidence = (): RegionEvidence => ({ entries: [], reads: [], uploadGroup: "", uploadBatch: "",
-  filterQ: false, minimumQ: 20, focus: true });
+  filterQ: false, minimumQ: 20, focus: true, showCpn: false });
 const baseColors = { A: "#258f64", C: "#397dd3", G: "#3e485b", T: "#d54d57" };
 
 function saveText(text: string, filename: string) {
@@ -77,7 +77,7 @@ export default function App() {
     return [[region.name, { reads: evidence.entries.length ? evidence.reads : reads,
       reference: evidence.entries.length ? regionReference : reference,
       center: evidence.entries.length ? regionCenter : center,
-      filterQ: evidence.filterQ, minimumQ: evidence.minimumQ, focus: evidence.focus }]];
+      filterQ: evidence.filterQ, minimumQ: evidence.minimumQ, focus: evidence.focus, showCpn: evidence.showCpn }]];
   })), [regions, regionEvidence, regionReference, regionCenter, reads, reference, center]);
   const comparison = useMemo<Comparison | null>(() => {
     if (groups.length < 2 || useCompared.length < 2) return null;
@@ -165,7 +165,7 @@ export default function App() {
     }
     updateRegionEvidence(name, { reads: mapped });
     setBusy(false);
-    setNotice(`${name} 完成 ${mapped.length} 个 AB1 比对，按样本和批次拼接为 ${regionBatches(mapped).length} 条区域峰图。`);
+    setNotice(`${name} 完成 ${mapped.length} 个 AB1 比对，按样本和批次拼接为 ${regionBatches(mapped).length} 行区域 logo。`);
     if (failures.length) setError(failures.join("；"));
   };
 
@@ -273,7 +273,7 @@ export default function App() {
             <button disabled={busy || !comparison} onClick={() => void exportFigure("combined", "png")}>合并 PNG</button>
             <button disabled={busy || !comparison} onClick={() => void exportFigure("combined", "pdf")}>合并 PDF</button>
             <button disabled={busy || !comparison} onClick={() => void exportFigure("main", "png")}>单独主图</button>
-            <button disabled={busy || !comparison || !regions.length} onClick={() => void exportFigure("traces", "png")}>单独 AB1 图</button></div>
+            <button disabled={busy || !comparison || !regions.length} onClick={() => void exportFigure("logo", "png")}>单独 AB1 logo 图</button></div>
         </section>
       </aside>
       <div className="content">
@@ -303,13 +303,13 @@ export default function App() {
               : `观察差异模式：所选组最大均值差 > ${threshold} 个百分点；不显示 P 值。`}</p>
             <SharedChart datasets={datasets} comparison={comparison} viewport={viewport} setViewport={(v) => { setViewport(v); setStart(String(Math.round(v[0]))); setEnd(String(Math.round(v[1]))); }} regions={regions} />
             {regions.length > 0 && <><RegionAtlas datasets={datasets} comparison={comparison} regions={regions}
-              sources={regionSources} trim={trim} qualityThreshold={qualityThreshold} windowSize={windowSize} />
+              sources={regionSources} />
               <div className="legend"><span style={{ color: baseColors.A }}>● A</span><span style={{ color: baseColors.C }}>● C</span>
                 <span style={{ color: baseColors.G }}>● G</span><span style={{ color: baseColors.T }}>● T</span></div></>}
           </> : <p className="empty">至少导入两个条件组，图谱会在这里出现。</p>}</section>
         {active && comparison && activeEvidence && <section className="card"><div className="section-head"><div><div className="eyebrow">REGIONAL EVIDENCE</div>
           <h2>{active.name} · {Math.round(active.start)}–{Math.round(active.end)} bp</h2></div></div>
-          <div className="region-inputs"><h3>为 {active.name} 补充 AB1 峰图</h3>
+          <div className="region-inputs"><h3>为 {active.name} 补充 AB1 序列 logo</h3>
             <label>区域共用参考 DNA 序列（FASTA 或纯序列）<textarea rows={4} value={regionReferenceInput}
               onChange={(e) => { setRegionReferenceInput(e.target.value); resetRegionReads(); }} placeholder=">reference\nACGT…" /></label>
             <label>区域共用靶序列（对应表格的 distance=0）<input value={regionTargetInput}
@@ -332,18 +332,20 @@ export default function App() {
                 <td><button className="small" onClick={() => updateRegionEvidence(active.name, {
                   entries: activeEvidence.entries.filter((item) => item.id !== entry.id), reads: [] })}>移除</button></td></tr>)}</tbody></table></div></details>}
             <button className="primary" disabled={busy || !activeEvidence.entries.length}
-              onClick={() => void processRegionAb1(active.name)}>{busy ? "正在处理…" : `比对并显示 ${active.name} 峰图`}</button>
+              onClick={() => void processRegionAb1(active.name)}>{busy ? "正在处理…" : `比对并显示 ${active.name} logo`}</button>
             <div className="region-options"><label className="check"><input type="checkbox" checked={activeEvidence.filterQ}
-              onChange={(e) => updateRegionEvidence(active.name, { filterQ: e.target.checked })} /> 按质控分数筛选峰图</label>
+              onChange={(e) => updateRegionEvidence(active.name, { filterQ: e.target.checked })} /> 按质控分数筛选 logo</label>
               {activeEvidence.filterQ && <label>最低 Phred Q<input type="number" min="0" max="60" value={activeEvidence.minimumQ}
                 onChange={(e) => updateRegionEvidence(active.name, { minimumQ: Math.max(0, Math.min(60, Number(e.target.value) || 0)) })} /></label>}
               <label className="check"><input type="checkbox" checked={activeEvidence.focus}
-                onChange={(e) => updateRegionEvidence(active.name, { focus: e.target.checked })} /> Focus：稀疏 CpG 横向拉宽 1.8 倍，密集 CpG 连续显示</label></div>
+                onChange={(e) => updateRegionEvidence(active.name, { focus: e.target.checked })} /> Focus：只显示 CpG 位点的 C/T logo</label>
+              <label className="check"><input type="checkbox" checked={activeEvidence.showCpn}
+                onChange={(e) => updateRegionEvidence(active.name, { showCpn: e.target.checked })} /> 显示非 CpG C（CpN）位点</label></div>
           </div>
-          <p className="hint">比对后，峰图显示在上方对应的局部图下方。</p></section>}
+          <p className="hint">比对后，logo 显示在上方对应的局部图下方。CpG/CpN 按 C/T 峰高比例绘制；关闭 Focus 后，其他位点按四通道峰高比例浅色显示。</p></section>}
         {preview && <section className="card"><div className="section-head"><div><div className="eyebrow">REPORT</div><h2>合并报告预览</h2></div></div>
-          <img className="report-preview" src={preview} alt="甲基化与 AB1 合并报告" />
-          <p className="hint">无测序信号的位置留白；区域峰图按当前质控与 Focus 选择生成。</p></section>}
+          <img className="report-preview" src={preview} alt="甲基化与 AB1 logo 合并报告" />
+          <p className="hint">无测序信号的位置留白；区域 logo 按当前质控、Focus 与 CpN 选择生成。</p></section>}
       </div>
     </main>
   </div>;

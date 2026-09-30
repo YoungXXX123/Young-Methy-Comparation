@@ -7,6 +7,9 @@ export type TraceCurves = Record<Base, TracePoint[]>;
 export type ChosenRead = { read: Read; score: number; coverage: number; meanQ: number; curves?: TraceCurves };
 export type RegionBatch = { group: string; batch: string; reads: Read[] };
 export type RegionalTrace = { curves: TraceCurves; cpgSites: number[]; meanQ: number | null; coveredBases: number };
+export type LogoKind = "cpg" | "cpn" | "other";
+export type LogoColumn = { index: number; distance: number; kind: LogoKind; proportions: Record<Base, number>; quality: number | null };
+export type RegionalLogo = { columns: LogoColumn[]; meanQ: number | null; coveredBases: number };
 export const FOCUS_X_STRETCH = 1.8;
 const FOCUS_HALF_WINDOW = 2.5;
 
@@ -55,6 +58,39 @@ export function cpgDistances(reference: string, region: Region, center: number):
     }
   }
   return out;
+}
+
+// Uses the same per-position, highest-Phred AB1 signal chosen for batch table generation.
+export function mergedRegionalLogo(reads: Read[], reference: string, center: number, region: Region,
+  filterQ: boolean, minimumQ: number): RegionalLogo {
+  if (!reads.length) return { columns: [], meanQ: null, coveredBases: 0 };
+  const { result } = mergedSiteOwners(reads);
+  const columns: LogoColumn[] = [], qualities: number[] = [];
+  let coveredBases = 0;
+  for (const index of result.mappedIndices) {
+    const distance = index - center;
+    if (distance < region.start || distance > region.end || index >= reference.length) continue;
+    const q = result.mappedQuality.get(index);
+    if (filterQ && (!Number.isFinite(q) || Number(q) < minimumQ)) continue;
+    const raw = Object.fromEntries(bases.map((base) => [base, Math.max(0, result.matrix[base][index])])) as Record<Base, number>;
+    if (bases.some((base) => !Number.isFinite(raw[base]))) continue;
+    const total = bases.reduce((sum, base) => sum + raw[base], 0);
+    if (total <= 0) continue;
+    coveredBases += 1;
+    if (Number.isFinite(q)) qualities.push(Number(q));
+    const cpg = reference[index] === "C" && reference[index + 1] === "G";
+    const called = bases.reduce((best, base) => raw[base] > raw[best] ? base : best, "A" as Base);
+    const cpn = reference[index] === "C" && reference[index + 1] !== "G" && called === "C";
+    const kind: LogoKind = cpg ? "cpg" : cpn ? "cpn" : "other";
+    const ct = raw.C + raw.T;
+    if (kind !== "other" && ct <= 0) continue;
+    const proportions = kind === "other"
+      ? Object.fromEntries(bases.map((base) => [base, raw[base] / total])) as Record<Base, number>
+      : { A: 0, C: raw.C / ct, G: 0, T: raw.T / ct };
+    columns.push({ index, distance, kind, proportions, quality: Number.isFinite(q) ? Number(q) : null });
+  }
+  return { columns, meanQ: qualities.length ? qualities.reduce((sum, q) => sum + q, 0) / qualities.length : null,
+    coveredBases };
 }
 
 export function focusPosition(value: number, site: number, region: Region, width: number, left: number, right: number) {
