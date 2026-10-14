@@ -141,6 +141,15 @@ export default function App() {
 
   const updateTable = (id: string, key: "group" | "batch", value: string) =>
     setTables((current) => current.map((row) => row.id === id ? { ...row, [key]: value } : row));
+  const clearAb1 = () => {
+    setAb1([]);
+    setReads([]);
+    setGenerated([]);
+    setCpnRun(null);
+    setPreview("");
+    setError("");
+    setNotice("已清空 AB1 文件区及对应比对结果，参考序列和靶点设置已保留，可直接上传新文件。");
+  };
   const updateAb1 = (id: string, change: Partial<Ab1Entry>) => {
     setCpnRun(null);
     setAb1((current) => current.map((entry) => entry.id === id ? { ...entry, ...change } : entry));
@@ -321,6 +330,7 @@ export default function App() {
           <datalist id="known-groups">{groups.map((group) => <option key={group} value={group} />)}</datalist>
           <label className="upload-box">＋ 选择 AB1（可多选）<input type="file" accept=".ab1,.abi" multiple
             onChange={(e) => { addAb1(e.target.files); e.target.value = ""; }} /></label>
+          <button className="secondary" disabled={busy || !ab1.length} onClick={clearAb1}>一键清空 AB1 文件区</button>
           <details><summary>原算法质量修剪设置</summary><label className="check"><input type="checkbox" checked={trim} onChange={(e) => setTrim(e.target.checked)} /> 启用滑窗 Phred 修剪</label>
             <div className="input-pair"><label>最低平均 Q<input type="number" min="1" max="60" value={qualityThreshold} onChange={(e) => setQualityThreshold(Number(e.target.value))} /></label>
               <label>窗口 bp<input type="number" min="3" max="100" value={windowSize} onChange={(e) => setWindowSize(Number(e.target.value))} /></label></div></details>
