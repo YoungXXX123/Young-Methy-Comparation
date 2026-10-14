@@ -1,4 +1,5 @@
 import type { CpgRow } from "./legacy-alignment";
+import { locateTarget, TargetMark } from "./target-marker";
 
 type Batch = { group: string; batch: string; rows: CpgRow[] };
 const colors = ["#397dd3", "#d54d57", "#258f64", "#8f62bd", "#c58d25", "#36a0a4"];
@@ -21,8 +22,8 @@ function saveCsv(batches: Batch[]) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-export function CpnResults({ reference, target, batches, failures }: {
-  reference: string; target: string; batches: Batch[]; failures: string[];
+export function CpnResults({ reference, target, targetName = "", batches, failures }: {
+  reference: string; target: string; targetName?: string; batches: Batch[]; failures: string[];
 }) {
   const all = batches.flatMap((batch) => batch.rows);
   const distances = all.map((row) => row.distance);
@@ -38,6 +39,8 @@ export function CpnResults({ reference, target, batches, failures }: {
       {[0, .25, .5, .75, 1].map((tick) => <g key={tick}><line x1="66" x2="844" y1={y(tick)} y2={y(tick)} stroke="#e6eeed" />
         <text x="58" y={y(tick) + 4} textAnchor="end" fontSize="12" fill="#667e7f">{tick * 100}%</text></g>)}
       <line x1="66" x2="844" y1="245" y2="245" stroke="#9ab1b0" />
+      <TargetMark target={locateTarget(reference, target, targetName, "原始靶点")} bounds={[minimum, maximum]}
+        left={66} right={844} top={40} bottom={245} labelY={24} />
       {batches.map((batch, index) => {
         const rows = [...batch.rows].sort((a, b) => a.distance - b.distance);
         const color = colors[index % colors.length];

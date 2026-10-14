@@ -6,6 +6,7 @@ import { colors, fullBounds, groupSeries } from "./chart";
 import { regionCanvasWidth, regionColumns } from "./region-layout";
 import type { RegionSource } from "./report";
 import { logoColors, logoLetters, logoPlacements } from "./sequence-logo";
+import { TargetMark } from "./target-marker";
 
 type LogoRow = { batch: RegionBatch; logo: RegionalLogo };
 
@@ -61,6 +62,8 @@ export function RegionAtlas({ datasets, comparison, regions, sources }: {
           return <g key={value}><line x1={plotLeft} x2={plotRight} y1={yy} y2={yy} stroke="#edf2f0" />
             <text x={plotLeft - 6} y={yy + 4} textAnchor="end" fontSize="10" fill="#8a9a9a">{value * 100}%</text></g>;
         })}
+        <TargetMark target={source?.target} bounds={[region.start, region.end]} left={plotLeft} right={plotRight}
+          top={zoomTop + 37} bottom={zoomTop + 153} labelY={zoomTop + 20} />
         {comparison.groups.map((group, i) => {
           const points = groupSeries(datasets, group);
           let started = false, path = "";
@@ -81,6 +84,8 @@ export function RegionAtlas({ datasets, comparison, regions, sources }: {
           const placements = logoPlacements(logo.columns, region, focus, plotLeft, plotRight);
           const rowTop = logoTop + rowIndex * logoHeight, baseline = rowTop + 96;
           return <g key={`${batch.group}:${batch.batch}`} aria-label={`${region.name} ${batch.group} ${batch.batch}`}>
+            <TargetMark target={source?.target} bounds={[region.start, region.end]} left={plotLeft} right={plotRight}
+              top={rowTop + 30} bottom={baseline} labelY={rowTop + 27} fontSize={10} />
             <line x1={plotLeft} x2={plotRight} y1={baseline} y2={baseline} stroke="#e3ebe8" />
             <text x={plotLeft + 5} y={rowTop + 15} fontSize="11" fontWeight="700" fill="#294f50">{region.name}区</text>
             {!focus && <text x={plotRight} y={rowTop + 15} textAnchor="end" fontSize="11" fill="#76908e">

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { Dataset } from "./data";
 import type { Comparison } from "./statistics";
 import type { Region } from "./ab1";
+import { TargetMark, type TargetMarker } from "./target-marker";
 
 export const colors = ["#526778", "#db7846", "#6579bd", "#9e6a99", "#5c9a83", "#bd9d49"];
 export type Bounds = [number, number];
@@ -45,8 +46,8 @@ function pointsPath(points: Array<{ x: number; y: number | null }>, xScale: (x: 
   return path;
 }
 
-export function SharedChart({ datasets, comparison, viewport, setViewport, regions }: {
-  datasets: Dataset[]; comparison: Comparison; viewport: Bounds; setViewport: (value: Bounds) => void; regions: Region[];
+export function SharedChart({ datasets, comparison, viewport, setViewport, regions, target }: {
+  datasets: Dataset[]; comparison: Comparison; viewport: Bounds; setViewport: (value: Bounds) => void; regions: Region[]; target?: TargetMarker | null;
 }) {
   const width = 1000, left = 66, right = 24, panelHeight = 170, panelTop = 35;
   const height = comparison.groups.length * panelHeight + 50;
@@ -95,6 +96,8 @@ export function SharedChart({ datasets, comparison, viewport, setViewport, regio
           width={xScale(r.end) - xScale(r.start)} height={110} fill="#f2d9a8" opacity=".45" />)}
         {viewport[0] <= 0 && viewport[1] >= 0 && <line x1={xScale(0)} x2={xScale(0)} y1={top + 10} y2={top + 118}
           stroke="#b7c4c8" strokeDasharray="3 4" />}
+        <TargetMark target={target} bounds={viewport} left={left} right={width - right} top={top + 10} bottom={top + 118}
+          labelY={top - 10} labelLeft={left + (width - left - right) * .45} />
         <path d={pointsPath(points, xScale, yScale, viewport)} fill="none" stroke={colors[index % colors.length]} strokeWidth="2" />
         {points.filter((p) => p.y !== null && p.x >= viewport[0] && p.x <= viewport[1]).map((p) =>
           <circle key={p.x} cx={xScale(p.x)} cy={yScale(p.y!)} r="2.5" fill={colors[index % colors.length]}>

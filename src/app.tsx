@@ -8,6 +8,7 @@ import { clampBounds, fullBounds, SharedChart, type Bounds } from "./chart";
 import { RegionAtlas } from "./region-atlas";
 import { downloadReport, reportCanvas, type RegionSource, type ReportPart } from "./report";
 import { CpnResults } from "./cpn-results";
+import { locateTarget } from "./target-marker";
 
 type Ab1Entry = { id: string; file: File; group: string; batch: string; includeTable: boolean };
 type RegionAb1Entry = { id: string; file: File; group: string; batch: string };
@@ -40,10 +41,12 @@ export default function App() {
   const [reads, setReads] = useState<Read[]>([]);
   const [referenceInput, setReferenceInput] = useState("");
   const [targetInput, setTargetInput] = useState("");
+  const [targetNameInput, setTargetNameInput] = useState("");
   const [cpnEnabled, setCpnEnabled] = useState(false);
   const [cpnDialogOpen, setCpnDialogOpen] = useState(false);
   const [cpnReferenceInput, setCpnReferenceInput] = useState("");
   const [cpnTargetInput, setCpnTargetInput] = useState("");
+  const [cpnTargetNameInput, setCpnTargetNameInput] = useState("");
   const [cpnMode, setCpnMode] = useState<"together" | "alone">("together");
   const [cpnRun, setCpnRun] = useState<CpnRun | null>(null);
   const [trim, setTrim] = useState(false);
@@ -57,6 +60,7 @@ export default function App() {
   const [regionEvidence, setRegionEvidence] = useState<Record<string, RegionEvidence>>({});
   const [regionReferenceInput, setRegionReferenceInput] = useState("");
   const [regionTargetInput, setRegionTargetInput] = useState("");
+  const [regionTargetNameInput, setRegionTargetNameInput] = useState("");
   const [selectedRegion, setSelectedRegion] = useState("");
   const [viewport, setViewport] = useState<Bounds>([-25, 25]);
   const [start, setStart] = useState("");
@@ -82,14 +86,19 @@ export default function App() {
   const regionCenter = regionTarget && regionReference.indexOf(regionTarget) >= 0 &&
     regionReference.indexOf(regionTarget) === regionReference.lastIndexOf(regionTarget)
     ? regionReference.indexOf(regionTarget) + (regionTarget.length - 1) / 2 : null;
+  const targetMarker = useMemo(() => locateTarget(reference, target, targetNameInput), [reference, target, targetNameInput]);
+  const regionTargetMarker = useMemo(() => locateTarget(regionReference, regionTarget, regionTargetNameInput),
+    [regionReference, regionTarget, regionTargetNameInput]);
+  const overviewTarget = targetMarker ?? regionTargetMarker;
   const regionSources = useMemo<Record<string, RegionSource>>(() => Object.fromEntries(regions.flatMap((region) => {
     const evidence = regionEvidence[region.name];
     if (!evidence) return [];
     return [[region.name, { reads: evidence.entries.length ? evidence.reads : reads,
       reference: evidence.entries.length ? regionReference : reference,
       center: evidence.entries.length ? regionCenter : center,
-      filterQ: evidence.filterQ, minimumQ: evidence.minimumQ, focus: evidence.focus }]];
-  })), [regions, regionEvidence, regionReference, regionCenter, reads, reference, center]);
+      filterQ: evidence.filterQ, minimumQ: evidence.minimumQ, focus: evidence.focus,
+      target: evidence.entries.length ? regionTargetMarker : overviewTarget }]];
+  })), [regions, regionEvidence, regionReference, regionCenter, reads, reference, center, regionTargetMarker, overviewTarget]);
   const comparison = useMemo<Comparison | null>(() => {
     if (groups.length < 2 || useCompared.length < 2) return null;
     try { return analyzeDatasets(datasets, useCompared, threshold, method, marking); }
@@ -97,7 +106,7 @@ export default function App() {
   }, [datasets, groups.join("\u0000"), useCompared.join("\u0000"), threshold, method, marking]);
   const full = useMemo(() => fullBounds(datasets), [datasets]);
   useEffect(() => { setViewport(full); setStart(String(Math.round(full[0]))); setEnd(String(Math.round(full[1]))); }, [full[0], full[1]]);
-  useEffect(() => { setPreview(""); }, [datasets, regions, reads, regionEvidence, regionReference, regionTarget, threshold, method, marking, compared]);
+  useEffect(() => { setPreview(""); }, [datasets, regions, reads, regionEvidence, regionReference, regionTarget, threshold, method, marking, compared, targetMarker, regionTargetMarker]);
 
   const resetRegionReads = () => setRegionEvidence((current) => Object.fromEntries(
     Object.entries(current).map(([name, evidence]) => [name, { ...evidence, reads: [] }])));
@@ -281,7 +290,7 @@ export default function App() {
     if (!comparison) { setError("请先导入可比较的数据。"); return; }
     setBusy(true); setError("");
     try {
-      const canvas = await reportCanvas(datasets, comparison, regions, reads, reference, center, part, trim, qualityThreshold, windowSize, regionSources);
+      const canvas = await reportCanvas(datasets, comparison, regions, reads, reference, center, part, trim, qualityThreshold, windowSize, regionSources, overviewTarget);
       if (shouldPreview) setPreview(canvas.toDataURL("image/png"));
       else await downloadReport(canvas, format, `Young-Methy-Comparation_${part}.${format}`);
       setNotice(shouldPreview ? "报告预览已生成。" : "文件已交给浏览器下载。");
@@ -306,6 +315,7 @@ export default function App() {
         <section className="card"><h2><span>02</span> 从 AB1 生成表格</h2>
           <label>参考 DNA 序列（FASTA 或纯序列）<textarea value={referenceInput} onChange={(e) => setReferenceInput(e.target.value)} placeholder=">reference\nACGT…" rows={4} /></label>
           <label>靶序列（在参考中恰好出现一次）<input value={targetInput} onChange={(e) => setTargetInput(e.target.value)} placeholder="ACGT…" /></label>
+          <label>靶点名称（可选）<input value={targetNameInput} onChange={(e) => setTargetNameInput(e.target.value)} placeholder="未填写时显示：靶点" /></label>
           <div className="input-pair"><label>本次上传所属条件组<input list="known-groups" value={ab1UploadGroup} onChange={(e) => setAb1UploadGroup(e.target.value)} /></label>
             <label>本次上传独立批次<input value={ab1UploadBatch} onChange={(e) => setAb1UploadBatch(e.target.value)} /></label></div>
           <datalist id="known-groups">{groups.map((group) => <option key={group} value={group} />)}</datalist>
@@ -370,14 +380,14 @@ export default function App() {
             {generated.map((d) => <tr key={d.id}><td>{d.group} / {d.batch}</td><td>{d.rows.length}</td><td>{d.file}</td>
               <td><button className="small" onClick={() => saveText(datasetCsv(d), `${d.group}_${d.batch}_CpG.csv`)}>CSV</button></td></tr>)}</tbody></table></div>}
         </section>
-        {cpnRun && <CpnResults reference={cpnRun.reference} target={cpnRun.target} batches={cpnRun.batches} failures={cpnRun.failures} />}
+        {cpnRun && <CpnResults reference={cpnRun.reference} target={cpnRun.target} targetName={cpnTargetNameInput} batches={cpnRun.batches} failures={cpnRun.failures} />}
         {!(cpnEnabled && cpnMode === "alone") && <section className="card"><div className="section-head"><div><div className="eyebrow">OVERVIEW</div><h2>共轴甲基化图谱</h2></div><span className="muted">横向拖动缩放 · 点击图后按 + / − 调整 · 双击复位</span></div>
           {duplicateBatches && <p className="error">同一条件组出现重复批次名称；请在上方修改，以免把同一批次计为独立重复。</p>}
           {comparison ? <><div className="metrics"><div><strong>{comparison.groups.length}</strong><span>条件组</span></div><div><strong>{datasets.length}</strong><span>独立批次</span></div>
             <div><strong>{comparison.sites.length}</strong><span>CpG 坐标</span></div><div><strong>{comparison.sites.filter((s) => s.marked).length}</strong><span>红色星号</span></div></div>
             <p className="chart-note">{comparison.inferential ? `${method === "welch" ? "Welch" : "单因素"} ANOVA · ${marking.toUpperCase()} < 0.05；星号是所选组的总体检验。`
               : `观察差异模式：所选组最大均值差 > ${threshold} 个百分点；不显示 P 值。`}</p>
-            <SharedChart datasets={datasets} comparison={comparison} viewport={viewport} setViewport={(v) => { setViewport(v); setStart(String(Math.round(v[0]))); setEnd(String(Math.round(v[1]))); }} regions={regions} />
+            <SharedChart datasets={datasets} comparison={comparison} viewport={viewport} setViewport={(v) => { setViewport(v); setStart(String(Math.round(v[0]))); setEnd(String(Math.round(v[1]))); }} regions={regions} target={overviewTarget} />
             {regions.length > 0 && <><RegionAtlas datasets={datasets} comparison={comparison} regions={regions}
               sources={regionSources} />
               <div className="legend"><span style={{ color: baseColors.A }}>● A</span><span style={{ color: baseColors.C }}>● C</span>
@@ -390,6 +400,8 @@ export default function App() {
               onChange={(e) => { setRegionReferenceInput(e.target.value); resetRegionReads(); }} placeholder=">reference\nACGT…" /></label>
             <label>区域共用靶序列（对应表格的 distance=0）<input value={regionTargetInput}
               onChange={(e) => { setRegionTargetInput(e.target.value); resetRegionReads(); }} placeholder="ACGT…" /></label>
+            <label>区域共用靶点名称（可选）<input value={regionTargetNameInput}
+              onChange={(e) => setRegionTargetNameInput(e.target.value)} placeholder="未填写时显示：靶点" /></label>
             <div className="input-pair"><label>本次上传所属样本<select value={regionUploadGroup}
               onChange={(e) => updateRegionEvidence(active.name, { uploadGroup: e.target.value, uploadBatch: "" })}>
               {comparison.groups.map((group) => <option key={group} value={group}>{group}</option>)}</select></label>
@@ -430,6 +442,7 @@ export default function App() {
         onChange={(e) => { setCpnReferenceInput(e.target.value); setCpnRun(null); }} placeholder=">original-reference\nACGT…" /></label>
       <label>原始靶序列（在原始参考中恰好出现一次）<input value={cpnTargetInput}
         onChange={(e) => { setCpnTargetInput(e.target.value); setCpnRun(null); }} placeholder="ACGT…" /></label>
+      <label>原始靶点名称（可选）<input value={cpnTargetNameInput} onChange={(e) => setCpnTargetNameInput(e.target.value)} placeholder="未填写时显示：原始靶点" /></label>
       <div className="cpn-mode"><label><input type="radio" name="cpn-mode" checked={cpnMode === "together"}
         onChange={() => { setCpnMode("together"); setCpnRun(null); }} /> 与常规 CpG 一起呈现</label>
         <label><input type="radio" name="cpn-mode" checked={cpnMode === "alone"}

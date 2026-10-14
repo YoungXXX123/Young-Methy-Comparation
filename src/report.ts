@@ -5,10 +5,11 @@ import { mergedRegionalLogo, regionBatches,
 import { colors, fullBounds, groupSeries, type Bounds } from "./chart";
 import { regionCanvasWidth, regionColumns } from "./region-layout";
 import { logoColors, logoLetters, logoPlacements } from "./sequence-logo";
+import { drawTargetMark, type TargetMarker } from "./target-marker";
 
 export type ReportPart = "combined" | "main" | "logo";
 export type RegionSource = { reads: Read[]; reference: string; center: number | null;
-  filterQ: boolean; minimumQ: number; focus: boolean };
+  filterQ: boolean; minimumQ: number; focus: boolean; target?: TargetMarker | null };
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -21,7 +22,7 @@ function saveBlob(blob: Blob, filename: string) {
 export async function reportCanvas(datasets: Dataset[], comparison: Comparison, regions: Region[], reads: Read[],
   reference: string, center: number | null, part: ReportPart = "combined",
   _trim = false, _qualityThreshold = 20, _windowSize = 20,
-  regionSources: Record<string, RegionSource> = {}): Promise<HTMLCanvasElement> {
+  regionSources: Record<string, RegionSource> = {}, target: TargetMarker | null = null): Promise<HTMLCanvasElement> {
   const width = regionCanvasWidth(regions.length), left = 108, right = 64, header = 112, footer = 90;
   const full = fullBounds(datasets);
   const showMain = part !== "logo", showLogo = part !== "main";
@@ -106,6 +107,8 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
         ctx.fillStyle = "rgba(235, 198, 134, .23)";
         ctx.fillRect(x(r.start), top + 28, x(r.end) - x(r.start), mainHeight - 65);
       }
+      drawTargetMark(ctx, { target, bounds: full, left, right: width - right, top: top + 28, bottom: top + mainHeight - 37,
+        labelY: top + 18, labelLeft: left + (width - left - right) * .45 });
       line(groupSeries(datasets, group), full, x, yy, colors[i % colors.length]);
       stars(full, x, top + 37);
       top += mainHeight;
@@ -137,6 +140,9 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
       ctx.fillText(`${tick * 100}%`, plotLeft - 7, y + 4); ctx.textAlign = "left";
     }
     const bounds: Bounds = [region.start, region.end];
+    const regionalTarget = regionSources[region.name] ? regionSources[region.name].target : target;
+    drawTargetMark(ctx, { target: regionalTarget, bounds, left: plotLeft, right: plotRight,
+      top: zoomTop + 41, bottom: zoomTop + 167, labelY: zoomTop + 27 });
     comparison.groups.forEach((group, i) => line(groupSeries(datasets, group), bounds, x, yy, colors[i % colors.length]));
     stars(bounds, x, zoomTop + 40);
     ctx.fillStyle = "#6a7d86"; ctx.font = "13px sans-serif";
@@ -148,6 +154,8 @@ export async function reportCanvas(datasets: Dataset[], comparison: Comparison, 
       const rowTop = zoomTop + zoomHeight + rowIndex * logoHeight;
       const baseline = rowTop + logoHeight - 18;
       const placements = logoPlacements(logo.columns, region, focus, plotLeft, plotRight);
+      drawTargetMark(ctx, { target: regionalTarget, bounds, left: plotLeft, right: plotRight,
+        top: rowTop + 37, bottom: baseline, labelY: rowTop + 34, fontSize: 12 });
       ctx.fillStyle = "#2b4752"; ctx.font = "bold 13px sans-serif";
       ctx.fillText(`${region.name}区`, plotLeft + 5, rowTop + 20);
       if (!focus) {
